@@ -113,6 +113,7 @@ fi
 
 printf '项目服务与 Caddy 均已运行；80/443 端口正在监听。\n'
 printf '本机经局域网地址 %s 访问 HTTPS 首页：HTTP 200。\n' "$lan_ip"
+printf '若 netstat 把 80/443 显示为 tcp6 :::80/:::443，这是双栈监听；上面的 IPv4 请求已验证可用。\n'
 printf '上述 HTTP 检查绕过了 DNS 和证书信任，仅验证服务与路由。\n'
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
   firewall_zone=$(firewall-cmd --get-zone-of-interface="$lan_interface" 2>/dev/null || true)
@@ -127,6 +128,18 @@ if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewa
 fi
 if getent ahostsv4 char300.com | awk -v address="$lan_ip" '$1 == address { found = 1 } END { exit !found }'; then
   printf '当前机器已将 char300.com 解析到局域网地址。\n'
+  if curl --noproxy '*' --fail --silent --output /dev/null https://char300.com/; then
+    printf '当前机器的系统证书库已信任 Caddy 本地 CA。\n'
+  else
+    printf '当前机器尚未信任 Caddy 本地 CA；尝试使用 sudo caddy trust 安装根证书。\n'
+    sudo caddy trust
+    if curl --noproxy '*' --fail --silent --output /dev/null https://char300.com/; then
+      printf '当前机器现已信任 Caddy 本地 CA。\n'
+    else
+      printf '根证书安装后仍无法通过本机 HTTPS 校验，请检查系统或浏览器的证书信任设置。\n' >&2
+      exit 1
+    fi
+  fi
 else
   printf '当前机器尚未将 char300.com 解析到 %s；请配置局域网 DNS 或 hosts。\n' "$lan_ip"
 fi
