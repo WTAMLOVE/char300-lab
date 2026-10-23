@@ -1,4 +1,4 @@
-const APP_VERSION = "0.3.1";
+const APP_VERSION = "0.4.0";
 const APP_CACHE = `zhuzi-app-${APP_VERSION}`;
 const RUNTIME_CACHE = `zhuzi-runtime-${APP_VERSION}`;
 const FONT_CACHE = `zhuzi-fonts-${APP_VERSION}`;
@@ -41,6 +41,9 @@ self.addEventListener("fetch", (event) => {
   }
 
   const url = new URL(request.url);
+  if (url.origin === self.location.origin && url.pathname.startsWith("/api/")) {
+    return;
+  }
   if (request.mode === "navigate") {
     event.respondWith(networkFirst(request, APP_CACHE, "/index.html"));
     return;

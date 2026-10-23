@@ -12,16 +12,22 @@
 - 统计提示：显示 300 字标尺，并统计汉字、标点、连续数字等 token。
 - 主题与离线：支持跟随系统、日间、夜间；首次在线加载后可离线继续使用。
 - 导出与恢复：支持分享图片、Markdown、完整数据 ZIP、轻量分析 JSON，以及 ZIP/JSON 导入恢复。
+- 按需翻译：点击后把当前草稿或正在查看的版本译成自然英文，原文与译文对照阅读；译文不改写文章。
 
 ## 当前版本
 
-0.3.1 重构文章分享图与写作总览，并优化中文排版和总览导出体验。
+0.4.0 新增按需英文翻译，可配置 OpenAI 兼容服务。
 
 ## 运行
 
+需要 Node.js 22 和 pnpm 11。先复制 `.env.example` 为 `.env`，填写所选 AI 服务的模型 ID 和 API 密钥。开发时分别启动页面和接口：
+
 ```bash
-npm install
-npm run dev
+pnpm install
+cp .env.example .env
+pnpm run dev:api
+# 在另一个终端运行
+pnpm run dev
 ```
 
 默认访问地址：
@@ -32,14 +38,29 @@ http://127.0.0.1:5173/
 
 构建与预览：
 
+生产构建和本机启动（同一地址提供页面与翻译接口）：
+
 ```bash
-npm run build
-npm run preview
+pnpm run build
+pnpm run start
 ```
+
+默认监听 `127.0.0.1:8787`。在受信任的局域网内供其他设备访问时，可在 `.env` 中设置 `HOST=0.0.0.0`，并只放行局域网访问；不要把端口映射到公网。使用反向代理时，`APP_ORIGIN` 应设为浏览器访问的完整 origin（协议、主机和端口）。普通局域网 HTTP 地址可能不支持 OPFS 和 Service Worker，写作会尝试回退到 `localStorage`。
+
+翻译服务配置项：
+
+| 变量 | 含义 |
+| --- | --- |
+| `AI_API_FORMAT` | `chat-completions` 或 `responses`。 |
+| `AI_API_BASE_URL` | 服务地址前缀，不包含最终的 `/chat/completions` 或 `/responses`。 |
+| `AI_MODEL` | 所选服务支持的模型 ID。 |
+| `AI_API_KEY` | 仅供本机服务端读取的密钥；不要提交 `.env`。 |
+
+例如 OpenAI Responses 可用 `AI_API_FORMAT=responses`、`AI_API_BASE_URL=https://api.openai.com/v1`；DeepSeek Chat Completions 可用 `AI_API_FORMAT=chat-completions`、`AI_API_BASE_URL=https://api.deepseek.com`。OpenCode Console 需按所选模型支持的端点设置格式及地址。更换服务后重启接口进程。翻译接口需要网络；没有配置密钥时，文章的本地写作功能仍可使用，但翻译接口不能启动。
 
 ## 数据与备份
 
-逐字不需要服务器，也不会主动上传内容。写作数据保存在当前浏览器、当前访问地址对应的本地存储中，优先使用 OPFS，并保留 localStorage 作为兼容兜底。
+写作数据保存在当前浏览器、当前访问地址对应的本地存储中，优先使用 OPFS，并保留 localStorage 作为兼容兜底。应用不会自动上传文章；**只有点击“翻译成英文”时**，当前正文才会经本机翻译接口发送给 `.env` 中配置的 AI 服务，可能产生该服务的费用。译文只保留在当前页面内存，刷新后消失，也不进入备份。
 
 这意味着：
 
@@ -107,10 +128,11 @@ const prompt = await page.evaluate(() => window.zhuzi.getAnalysisPrompt());
 ## 常用命令
 
 ```bash
-npm run dev      # 启动开发服务器
-npm run build    # 构建静态网页
-npm run preview  # 预览构建结果
-npm test         # 运行数据兼容与统计规则测试
-npm run benchmark # 生成合成长档案性能基线
-npm run check    # 运行版本、测试、类型与生产构建检查
+pnpm run dev       # 启动开发页面
+pnpm run dev:api   # 启动本机翻译接口
+pnpm run build     # 构建网页
+pnpm run start     # 同源提供构建页面和翻译接口
+pnpm test          # 运行单元测试
+pnpm run benchmark # 生成合成长档案性能基线
+pnpm run check     # 运行版本、测试、类型与生产构建检查
 ```

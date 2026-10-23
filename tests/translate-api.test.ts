@@ -108,11 +108,26 @@ test("HTTP endpoint accepts a valid article and keeps private text out of logs",
 test("HTTP endpoint rejects invalid input, origin, body size and missing configuration", async () => {
   const request = createHarness({ config, fetchImpl: async () => completion("unused") });
   assert.equal((await request({ text: "  " })).status, 400);
+  assert.equal((await request("{broken json")).status, 400);
+  assert.equal((await request({ text: "正文" }, { "content-type": "text/plain" })).status, 400);
   assert.equal((await request({ text: "字".repeat(MAX_TEXT_CODEPOINTS + 1) })).status, 413);
   assert.equal((await request({ text: "字".repeat(MAX_REQUEST_BYTES) })).status, 413);
   assert.equal((await request({ text: "正文" }, { origin: "https://another.test" })).status, 403);
   assert.equal((await request(null, {}, "GET")).status, 405);
   assert.equal((await createHarness({})({ text: "正文" })).status, 503);
+  const strict = createHarness({ config, allowedOrigin: "http://127.0.0.1:8787", fetchImpl: async () => completion("yes") });
+  assert.equal((await strict({ text: "正文" }, { origin: "http://127.0.0.1:8787" })).status, 200);
+  assert.equal((await strict({ text: "正文" }, { host: "other.test", origin: "http://127.0.0.1:8787" })).status, 403);
+});
+
+test("HTTP endpoint limits repeated requests without calling the provider again", async () => {
+  let calls = 0;
+  const request = createHarness({ config, fetchImpl: async () => { calls += 1; return completion("Done."); } });
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal((await request({ text: "正文" })).status, 200);
+  }
+  assert.equal((await request({ text: "正文" })).status, 429);
+  assert.equal(calls, 10);
 });
 
 test("HTTP endpoint maps upstream rate limiting and timeout to stable errors", async () => {

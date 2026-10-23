@@ -25,6 +25,15 @@ const writingYearGoalDays = writingYearDays;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
   {
+    version: "0.4.0",
+    date: "2026-10-24",
+    title: "按需翻译",
+    items: [
+      "新增草稿和历史版本的英文参考译文，点击后才会发送当前正文。",
+      "支持配置 OpenAI 兼容服务，译文只在当前页面显示，不写入文章档案。"
+    ]
+  },
+  {
     version: "0.3.1",
     date: "2026-07-13",
     title: "分享图与写作总览",
@@ -824,6 +833,7 @@ function saveActiveVersion(): void {
     return;
   }
 
+  translationController.invalidate();
   const previousWritingYearCount = getWritingYears(getWrittenDateKeys(), todayKey()).length;
   state = saveVersion(state);
   const nextWritingYearCount = getWritingYears(getWrittenDateKeys(), todayKey()).length;
@@ -1017,6 +1027,7 @@ async function hydrateActiveStorage(): Promise<void> {
   }
 
   state = ensureTodayEntry(pruneHistoricalEmptyEntries(opfsState));
+  translationController.invalidate();
   resetDerivedCaches();
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
@@ -1166,8 +1177,8 @@ function showStorageDialog(mode: StorageDialogMode): void {
   } else {
     storageDialogKicker.textContent = "Local Storage";
     storageDialogTitle.textContent = "写作内容只保存在当前浏览器";
-    storageDialogBodyPrimary.textContent = "“逐字”不会把文章上传到云端，也不会保存到项目目录。你的内容保存在当前浏览器、当前访问地址对应的本地存储中。换浏览器、换地址、清理站点数据或使用无痕模式，都可能导致内容不可见。";
-    storageDialogBodySecondary.textContent = "认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。";
+    storageDialogBodyPrimary.textContent = "文章平时保存在当前浏览器、当前访问地址对应的本地存储中，不会自动上传。只有你点击“翻译成英文”时，本次正文才会发送给已配置的 AI 服务。换浏览器、换地址、清理站点数据或使用无痕模式，都可能导致本地内容不可见。";
+    storageDialogBodySecondary.textContent = "认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。译文不随备份保存。";
     storageDialogPrimaryButton.textContent = "我知道了";
   }
 
@@ -2007,6 +2018,7 @@ async function importBackup(file: File): Promise<void> {
       return;
     }
 
+    translationController.invalidate();
     state = ensureTodayEntry(importedState);
     resetDerivedCaches();
     persistState(state);
