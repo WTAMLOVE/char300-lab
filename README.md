@@ -20,7 +20,7 @@
 
 ## 运行
 
-需要 Node.js 22 和 pnpm 11。先复制 `.env.example` 为 `.env`，填写所选 AI 服务的模型 ID 和 API 密钥。开发时分别启动页面和接口：
+需要 Node.js 22 和 pnpm 11。先复制 `.env.example` 为 `.env`，填写所选 AI 服务的模型 ID 和 API 密钥。示例默认用于 `https://char300.com` 的 Caddy 部署；本机 Vite 开发时把 `APP_ORIGIN` 改为 `http://127.0.0.1:5173`。开发时分别启动页面和接口：
 
 ```bash
 pnpm install
