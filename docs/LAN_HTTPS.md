@@ -30,7 +30,13 @@
 
    让 Node 进程长期运行。它提供整个构建后的站点，Caddy 只负责 HTTPS 入口与反向代理。修改页面后需重新构建，修改服务端配置后需重启 Node 服务。
 
-3. 在另一终端检查并加载项目根目录的 `Caddyfile`。若使用系统 Caddy 服务，可将文件安装到 `/etc/caddy/Caddyfile` 后验证并重载：
+3. 在另一终端安装并启动 Caddy。Fedora 可在项目根目录运行以下脚本；它会通过 `dnf` 安装 Caddy、备份已有的系统 Caddyfile、安装本项目配置、启动系统服务，并输出本地 CA 根证书指纹与 HTTPS 校验结果。运行时需要本机 sudo 权限：
+
+   ```bash
+   sudo bash scripts/setup-caddy-fedora.sh
+   ```
+
+   其他 Linux 系统可手动安装 Caddy，再检查并加载项目根目录的 `Caddyfile`：
 
    ```bash
    sudo cp Caddyfile /etc/caddy/Caddyfile
@@ -38,7 +44,7 @@
    sudo systemctl reload caddy
    ```
 
-   首次安装服务且尚未运行时，使用 `sudo systemctl enable --now caddy` 启动。保留 Caddy 的数据目录；本地 CA 的私钥和自动签发的证书保存在那里。不要把 CA 私钥复制给客户端。
+   首次安装服务且尚未运行时，使用 `sudo systemctl enable --now caddy` 启动。保留 Caddy 的数据目录；本地 CA 的私钥和自动签发的证书保存在那里。不要把 CA 私钥复制给客户端。若 Fedora 防火墙拦截局域网访问，需按实际网络区域放行 80/443，仅限受信任的局域网。
 
 ## 信任本地 CA
 
