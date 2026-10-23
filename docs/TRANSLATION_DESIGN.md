@@ -95,7 +95,7 @@ flowchart LR
 | 400 | `INVALID_INPUT` | JSON 无效、字段不符、正文空白；前端提示检查正文。 |
 | 413 | `INPUT_TOO_LONG` | 超过请求体或正文字数上限；前端提示缩短正文。 |
 | 429 | `RATE_LIMITED` | 本地限流或上游限流；提示稍后重试。 |
-| 502 | `UPSTREAM_ERROR` | 上游错误、拒绝、响应格式错误或译文为空；允许重试。 |
+| 502 | `UPSTREAM_ERROR` | 上游错误、响应格式错误或译文为空；允许重试。 |
 | 503 | `UPSTREAM_AUTH_ERROR` | 上游拒绝认证或授权；检查服务商地址和密钥。 |
 | 504 | `UPSTREAM_TIMEOUT` | 上游超时；允许重试。 |
 | 503 | `SERVICE_UNAVAILABLE` | 未配置或未完整配置 AI 接口；页面照常运行，点击翻译后提示先配置 AI 接口。 |
