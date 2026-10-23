@@ -39,6 +39,15 @@ export function readProviderConfig(env = process.env) {
   return { format, endpoint: url.toString(), key, model };
 }
 
+export function readOptionalProviderConfig(env = process.env) {
+  try {
+    return readProviderConfig(env);
+  } catch (error) {
+    if (error instanceof ProviderError && error.code === "SERVICE_UNAVAILABLE") return null;
+    throw error;
+  }
+}
+
 function extractTranslation(format, body) {
   if (format === "chat-completions") {
     const choice = body?.choices?.[0];

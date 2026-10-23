@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { readProviderConfig, requestTranslation, ProviderError } from "../server/providers.mjs";
+import { readOptionalProviderConfig, readProviderConfig, requestTranslation, ProviderError } from "../server/providers.mjs";
 import { createTranslateHandler, MAX_REQUEST_BYTES, MAX_TEXT_CODEPOINTS } from "../server/translate.mjs";
 
 const config = {
@@ -55,6 +55,19 @@ test("provider configuration appends the selected endpoint and rejects unsafe UR
     "https://api.deepseek.test/chat/completions");
   assert.throws(() => readProviderConfig({ AI_API_BASE_URL: "http://public.test", AI_API_KEY: "secret", AI_MODEL: "model" }), ProviderError);
   assert.throws(() => readProviderConfig({ AI_API_BASE_URL: "https://example.test/v1/responses", AI_API_KEY: "secret", AI_MODEL: "model" }), ProviderError);
+});
+
+test("AI configuration is optional until translation is requested", async () => {
+  assert.equal(readOptionalProviderConfig({}), null);
+  assert.equal(readOptionalProviderConfig({ AI_API_BASE_URL: "https://example.test/v1" }), null);
+  assert.equal(readOptionalProviderConfig({ AI_API_BASE_URL: "http://public.test", AI_API_KEY: "secret", AI_MODEL: "model" }), null);
+  assert.equal(readOptionalProviderConfig({ AI_API_BASE_URL: "https://example.test/v1", AI_API_KEY: "secret", AI_MODEL: "model" })?.endpoint,
+    "https://example.test/v1/chat/completions");
+
+  const response = await createHarness({ config: readOptionalProviderConfig({}) })({ text: "今天散步了。" });
+  assert.equal(response.status, 503);
+  assert.equal(response.json().error.code, "SERVICE_UNAVAILABLE");
+  assert.equal(response.json().error.message, "请先在服务器配置 AI 接口，再使用翻译功能。");
 });
 
 test("chat completions sends the fixed prompt and original article as separate roles", async () => {

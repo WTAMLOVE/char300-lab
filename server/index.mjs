@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { createReadStream, statSync } from "node:fs";
 import { resolve, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readProviderConfig } from "./providers.mjs";
+import { readOptionalProviderConfig } from "./providers.mjs";
 import { createTranslateHandler } from "./translate.mjs";
 
 const contentTypes = {
@@ -21,13 +21,8 @@ const apiOnly = process.argv.includes("--api-only");
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 8787);
 const distDir = resolve(fileURLToPath(new URL("../dist/", import.meta.url)));
-let config;
-try {
-  config = readProviderConfig();
-} catch {
-  console.error("Translation server configuration is missing or invalid. Set AI_API_BASE_URL, AI_API_KEY, AI_MODEL and AI_API_FORMAT.");
-  process.exit(1);
-}
+const config = readOptionalProviderConfig();
+if (!config) console.warn("Translation is unavailable until AI_API_BASE_URL, AI_API_KEY and AI_MODEL are configured.");
 
 if (!apiOnly) {
   try {

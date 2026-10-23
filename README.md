@@ -20,7 +20,7 @@
 
 ## 运行
 
-需要 Node.js 22 和 pnpm 11。先复制 `.env.example` 为 `.env`，填写所选 AI 服务的模型 ID 和 API 密钥。示例默认用于 `https://char300.com` 的 Caddy 部署；本机 Vite 开发时把 `APP_ORIGIN` 改为 `http://127.0.0.1:5173`。开发时分别启动页面和接口：
+需要 Node.js 22 和 pnpm 11。先复制 `.env.example` 为 `.env`；不配置 AI 服务也能启动站点，点击翻译时会提示先配置 AI 接口。示例默认用于 `https://char300.com` 的 Caddy 部署；本机 Vite 开发时把 `APP_ORIGIN` 改为 `http://127.0.0.1:5173`。开发时分别启动页面和接口：
 
 ```bash
 pnpm install
@@ -49,12 +49,12 @@ pnpm run start
 
 | 变量 | 含义 |
 | --- | --- |
-| `AI_API_FORMAT` | `chat-completions` 或 `responses`。 |
-| `AI_API_BASE_URL` | 服务地址前缀，不包含最终的 `/chat/completions` 或 `/responses`。 |
+| `AI_API_FORMAT` | `chat-completions` 或 `responses`；不填写时默认前者。 |
+| `AI_API_BASE_URL` | 所选服务的 API 地址前缀，不包含最终的 `/chat/completions` 或 `/responses`。 |
 | `AI_MODEL` | 所选服务支持的模型 ID。 |
-| `AI_API_KEY` | 仅供本机服务端读取的密钥；不要提交 `.env`。 |
+| `AI_API_KEY` | 仅供服务端读取的密钥；不要提交 `.env`。 |
 
-例如 OpenAI Responses 可用 `AI_API_FORMAT=responses`、`AI_API_BASE_URL=https://api.openai.com/v1`；DeepSeek Chat Completions 可用 `AI_API_FORMAT=chat-completions`、`AI_API_BASE_URL=https://api.deepseek.com`。OpenCode Console 需按所选模型支持的端点设置格式及地址。更换服务后重启接口进程。翻译接口需要网络；没有配置密钥时，文章的本地写作功能仍可使用，但翻译接口不能启动。
+启用翻译时，在 `.env` 中同时填写所选服务的 `AI_API_BASE_URL`、`AI_MODEL`、`AI_API_KEY`，按模型支持的接口选择 `AI_API_FORMAT`。例如 OpenAI Responses 可用 `AI_API_FORMAT=responses`、`AI_API_BASE_URL=https://api.openai.com/v1`；DeepSeek Chat Completions 可用 `AI_API_FORMAT=chat-completions`、`AI_API_BASE_URL=https://api.deepseek.com`。其他兼容服务也按其文档填写地址前缀与模型。更换服务后重启项目服务。未配置或配置不完整时，写作和浏览正常可用，点击翻译会提示配置 AI 接口；翻译本身需要连接所选服务。
 
 ## 数据与备份
 

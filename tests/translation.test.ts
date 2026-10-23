@@ -79,3 +79,17 @@ test("client sends only text and displays a server error message", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("client shows the configuration prompt returned by an unconfigured server", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    error: { code: "SERVICE_UNAVAILABLE", message: "请先在服务器配置 AI 接口，再使用翻译功能。" }
+  }), { status: 503 });
+  try {
+    await assert.rejects(() => fetchTranslation(draft.text, new AbortController().signal), {
+      message: "请先在服务器配置 AI 接口，再使用翻译功能。"
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
