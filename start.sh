@@ -5,9 +5,55 @@ project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$project_dir"
 
 if [[ ${EUID} -eq 0 ]]; then
-  printf '请以普通用户运行 ./start.sh；仅首次配置 Caddy 时会提示输入 sudo 密码。\n' >&2
+  printf '请以普通用户运行 ./start.sh；管理 Caddy 时会按需提示输入 sudo 密码。\n' >&2
   exit 1
 fi
+
+usage() {
+  printf '用法：./start.sh [start|status|stop]\n' >&2
+}
+
+if [[ $# -gt 1 ]]; then
+  usage
+  exit 2
+fi
+
+case ${1:-start} in
+  status)
+    site_state=$(systemctl --user is-active char300.service 2>/dev/null || true)
+    site_enabled=$(systemctl --user is-enabled char300.service 2>/dev/null || true)
+    caddy_state=$(systemctl is-active caddy 2>/dev/null || true)
+    caddy_enabled=$(systemctl is-enabled caddy 2>/dev/null || true)
+    printf '项目服务 char300.service：%s（开机启动：%s）\n' "${site_state:-unknown}" "${site_enabled:-unknown}"
+    printf 'Caddy 服务：%s（开机启动：%s）\n' "${caddy_state:-unknown}" "${caddy_enabled:-unknown}"
+    if command -v ss >/dev/null 2>&1; then
+      printf '监听端口：\n'
+      if ! ss -ltn '( sport = :80 or sport = :443 or sport = :8787 )'; then
+        printf '无法读取监听端口；请检查 ss 权限。\n' >&2
+      fi
+    fi
+    if [[ $site_state == active && $caddy_state == active ]]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  stop)
+    if systemctl is-active --quiet caddy || systemctl is-enabled --quiet caddy; then
+      sudo systemctl disable --now caddy
+    fi
+    if systemctl --user is-active --quiet char300.service || systemctl --user is-enabled --quiet char300.service; then
+      systemctl --user disable --now char300.service
+    fi
+    printf '项目服务与 Caddy 已停止，并取消开机自启。\n'
+    exit
+    ;;
+  start)
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
 
 if [[ $project_dir != "$HOME/workspace/github/char300-lab" ]]; then
   printf 'deploy/char300.service 的工作目录固定为 %s；移动项目后请先同步修改该服务文件。\n' "$HOME/workspace/github/char300-lab" >&2
