@@ -17,7 +17,7 @@ import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ens
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
-const appUrl = "rewrite.closeai.moe";
+const appUrl = "char300.com";
 const storageNoticeKey = "zhuzi-storage-notice-dismissed-v1";
 const changelogSeenVersionKey = "zhuzi-changelog-seen-version";
 const themePreferenceKey = "zhuzi-theme-preference-v1";

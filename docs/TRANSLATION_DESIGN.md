@@ -1,6 +1,6 @@
 # 写作内容翻译功能详细设计
 
-> 状态：0.4.0 已按首版设计实现；真实 AI 服务联调需要用户自己的密钥，局域网 HTTPS 部署暂缓。依据 [`TRANSLATION_PLAN.md`](./TRANSLATION_PLAN.md)；2026-10-24。
+> 状态：0.4.0 已按首版设计实现；真实 AI 服务联调需要用户自己的密钥。局域网 HTTPS 部署已确定采用 Caddy 本地 CA 和 `char300.com`，部署操作见 [`LAN_HTTPS.md`](./LAN_HTTPS.md)。依据 [`TRANSLATION_PLAN.md`](./TRANSLATION_PLAN.md)；2026-10-24。
 
 ## 1. 已确定的需求
 
@@ -27,9 +27,9 @@ flowchart LR
   U -->|原有本地保存| S[浏览器 OPFS / localStorage]
 ```
 
-生产建议：同一局域网主机上运行静态站点与翻译服务，HTTPS 反向代理统一提供一个 origin，`/api/translate` 转发到仅监听 `127.0.0.1` 的应用服务，其余路径提供 Vite 构建后的 `dist/`。代理只允许局域网访问，不设置公网端口映射。API 进程的密钥只在服务器环境变量或服务器本地受保护的配置中，不进入 Vite 构建、浏览器存储、仓库或日志。局域网内其他设备仍可能请求此接口，因此保留输入限制、简单限流和服务商用量提醒。若局域网并非完全受信任，应另加访问保护；本设计不包含账户系统。
+生产部署：Caddy 的 `char300.com` 站点块使用 `tls internal`，由本地 CA 为**整个站点域名**签发证书。Caddy 将所有路径代理到仅监听 `127.0.0.1:8787` 的 `pnpm run start` 服务；Node 服务提供 Vite 构建后的页面、静态资源和 `/api/translate`。浏览器统一访问 `https://char300.com`，服务端配置 `APP_ORIGIN=https://char300.com`。局域网 DNS/hosts 将域名映射到服务器局域网 IP，访问设备信任 Caddy 根证书。Caddy 只允许局域网访问，不设置公网端口映射。API 进程的密钥只在服务器环境变量或服务器本地受保护的配置中，不进入 Vite 构建、浏览器存储、仓库或日志。局域网内其他设备仍可能请求此接口，因此保留输入限制、简单限流和服务商用量提醒。若局域网并非完全受信任，应另加访问保护；本设计不包含账户系统。具体操作见 [`LAN_HTTPS.md`](./LAN_HTTPS.md)。
 
-本机开发：`pnpm run dev` 仍绑定 `127.0.0.1`；Vite 开发代理把 `/api` 转到 `pnpm run dev:api` 启动的本机 API 服务，浏览器继续用同源相对路径。构建后可用 `pnpm run start` 在同一地址提供页面和接口。不要把 Vite 开发服务器直接当生产服务，也不要把 `server.allowedHosts` 设为 `true`。局域网 HTTPS 和 OPFS/Service Worker 的实际可用性按需另行验证。
+本机开发：`pnpm run dev` 仍绑定 `127.0.0.1`；Vite 开发代理把 `/api` 转到 `pnpm run dev:api` 启动的本机 API 服务，浏览器继续用同源相对路径。构建后可用 `pnpm run start` 在同一地址提供页面和接口。不要把 Vite 开发服务器直接当生产服务，也不要把 `server.allowedHosts` 设为 `true`。在实际访问设备上验证 HTTPS 信任、OPFS 与 Service Worker。
 
 推荐新增文件职责：
 
@@ -146,17 +146,17 @@ flowchart LR
 
 - 用真实选定服务翻译日常叙事、中英混写、多段落、引语、专名和含指令文字；译文忠实且自然，俚语使用适度，无前言和学习建议。
 - 桌面和移动端可对照阅读、复制，加载与错误状态清楚；慢请求中编辑/切换不会显示错位译文。
-- 如以后需要保证局域网设备上的 OPFS 与 Service Worker，再通过受信任的 HTTPS 地址验证 `window.isSecureContext`、OPFS 状态、Service Worker 注册、离线写作及从旧 origin 迁移档案；这不作为本轮翻译功能的验收条件。
+- 在局域网访问设备上通过 `https://char300.com` 验证 `window.isSecureContext`、OPFS 状态、Service Worker 注册、离线写作及从旧 origin 迁移档案；部署验收需要实际设备和受信任的 Caddy 根证书。
 - 查看浏览器开发者工具与服务器日志，确认仅点击时上传当前正文，翻译响应不被缓存，密钥不出现在网页资源和日志中。
 
 ## 10. 实施顺序与交付
 
 1. 搭建服务端最小接口及两种适配器、固定提示词和模拟上游测试。
 2. 接入前端翻译状态、按钮和对照区域，补足状态失效与移动端样式。
-3. 提供同源本机服务和开发代理，加入服务端配置示例与 `.gitignore`；局域网 HTTPS 留待后续按需配置。
+3. 提供同源本机服务和开发代理，加入服务端配置示例与 `.gitignore`；另用 Caddy 本地 CA 为整个 `char300.com` 站点提供局域网 HTTPS。
 4. 更新 README、应用内数据说明和版本信息；完成自动化与手工验收。
 
-使用真实服务前需确定运行主机、服务商、模型和密钥；局域网 HTTPS 地址与证书方式可后续决定，不改变翻译接口和页面设计。
+使用真实服务前需确定运行主机、服务商、模型和密钥。局域网 HTTPS 地址与证书方式已确定；实际签发和客户端信任配置在部署主机与访问设备上完成。
 
 ## 资料
 

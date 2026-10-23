@@ -1,0 +1,5 @@
+# One HTTPS origin for the entire site, including its static assets and API.
+char300.com {
+    tls internal
+    reverse_proxy 127.0.0.1:8787
+}
