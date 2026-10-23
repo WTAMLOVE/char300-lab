@@ -14,7 +14,7 @@ if [[ $project_dir != "$HOME/workspace/github/char300-lab" ]]; then
   exit 1
 fi
 
-for command_name in fnm systemctl curl; do
+for command_name in fnm systemctl curl ss ip getent; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     printf '缺少 %s，请先安装。\n' "$command_name" >&2
     exit 1
@@ -76,13 +76,58 @@ elif ! systemctl is-active --quiet caddy || ! systemctl is-enabled --quiet caddy
   sudo systemctl enable --now caddy
 fi
 
+if ! systemctl --user is-active --quiet char300.service || ! systemctl is-active --quiet caddy; then
+  printf '项目服务或 Caddy 未运行；请检查 systemctl 状态。\n' >&2
+  exit 1
+fi
+
+for listen_port in 80 443; do
+  if [[ -z $(ss -H -ltn "( sport = :$listen_port )") ]]; then
+    printf 'Caddy 服务处于运行状态，但没有监听 %s 端口。\n' "$listen_port" >&2
+    exit 1
+  fi
+done
+
+lan_interface=$(ip -4 -o addr show scope global | awk '$2 != "docker0" { print $2; exit }')
+lan_ip=$(ip -4 -o addr show scope global | awk '$2 != "docker0" { sub(/\/.*/, "", $4); print $4; exit }')
+if [[ -z $lan_ip ]]; then
+  printf '未找到局域网 IPv4 地址；请检查网络接口。\n' >&2
+  exit 1
+fi
+
 http_status=$(curl --noproxy '*' --silent --show-error --insecure \
   --resolve char300.com:443:127.0.0.1 --output /dev/null \
   --write-out '%{http_code}' https://char300.com/)
 if [[ $http_status != 200 ]]; then
-  printf 'Caddy 已启动，但首页返回 HTTP %s；请检查服务日志。\n' "$http_status" >&2
+  printf 'Caddy 回环入口的首页返回 HTTP %s；请检查服务日志。\n' "$http_status" >&2
   exit 1
 fi
 
-printf '项目已启动：https://char300.com/\n'
-printf '本机已验证 HTTPS 路由；其他设备仍需局域网 DNS 和 Caddy 根证书信任。\n'
+http_status=$(curl --noproxy '*' --silent --show-error --insecure \
+  --resolve "char300.com:443:$lan_ip" --output /dev/null \
+  --write-out '%{http_code}' https://char300.com/)
+if [[ $http_status != 200 ]]; then
+  printf 'Caddy 在局域网地址 %s 上的首页返回 HTTP %s。\n' "$lan_ip" "$http_status" >&2
+  exit 1
+fi
+
+printf '项目服务与 Caddy 均已运行；80/443 端口正在监听。\n'
+printf '本机经局域网地址 %s 访问 HTTPS 首页：HTTP 200。\n' "$lan_ip"
+printf '上述 HTTP 检查绕过了 DNS 和证书信任，仅验证服务与路由。\n'
+if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+  firewall_zone=$(firewall-cmd --get-zone-of-interface="$lan_interface" 2>/dev/null || true)
+  if [[ -n $firewall_zone ]]; then
+    if firewall-cmd --zone="$firewall_zone" --query-service=http >/dev/null &&
+      firewall-cmd --zone="$firewall_zone" --query-service=https >/dev/null; then
+      printf '防火墙区域 %s 已放行 HTTP/HTTPS。\n' "$firewall_zone"
+    else
+      printf '防火墙区域 %s 尚未同时放行 HTTP/HTTPS，其他设备可能无法访问。\n' "$firewall_zone"
+    fi
+  fi
+fi
+if getent ahostsv4 char300.com | awk -v address="$lan_ip" '$1 == address { found = 1 } END { exit !found }'; then
+  printf '当前机器已将 char300.com 解析到局域网地址。\n'
+else
+  printf '当前机器尚未将 char300.com 解析到 %s；请配置局域网 DNS 或 hosts。\n' "$lan_ip"
+fi
+printf '其他设备还需信任 Caddy 根证书；完成后访问 https://char300.com/。\n'
