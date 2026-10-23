@@ -1007,6 +1007,91 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.translation-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.translation-toolbar span,
+.translation-status {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.translation-panel {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 48%;
+  overflow: auto;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--bg);
+}
+
+.translation-panel-head,
+.translation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.translation-panel-head {
+  justify-content: space-between;
+}
+
+.translation-panel h3,
+.translation-panel h4 {
+  margin: 0;
+  font-weight: 500;
+}
+
+.translation-panel h3 {
+  font-size: 17px;
+}
+
+.translation-panel h4 {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.translation-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.translation-columns > div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--subtle-faint);
+}
+
+.translation-columns p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
+.translation-status {
+  margin: 10px 0 0;
+}
+
+.translation-status[role="alert"] {
+  color: var(--danger);
+}
+
 mark {
   border-radius: 3px;
   padding: 0 0.08em;
@@ -1492,6 +1577,10 @@ body.theme-dark .year-cell.written.level-3 {
   .overview-view {
     flex: 0 0 auto;
   }
+
+  .translation-panel {
+    max-height: 55vh;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1596,5 +1685,9 @@ body.theme-dark .year-cell.written.level-3 {
     min-height: 420px;
     padding: 18px;
     font-size: 19px;
+  }
+
+  .translation-columns {
+    grid-template-columns: 1fr;
   }
 }

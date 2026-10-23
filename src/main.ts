@@ -7,6 +7,7 @@ import shareLogoUrl from "./assets/share-logo.svg";
 import { addBackupJsonFiles, createAnalysisBackupPayload, generateCompressedZip, readBackupPayload } from "./backup";
 import { alignDiffToContent, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
+import { fetchTranslation, maxTranslationCodepoints, TranslationController, type TranslationSource, type TranslationState } from "./translation";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
 import { getOverviewExportBarLayout, getOverviewMonthMarkers, getRevisionTotals, overviewExportTrackWidth } from "./overview-layout";
 import { dailyShareLineHeight, getDailyShareLayout } from "./share-card-layout";
@@ -366,6 +367,25 @@ app.innerHTML = `
             <div class="stats-row" id="statsRow"></div>
             <textarea id="editor" spellcheck="false" placeholder="写下今天的 300 字。保存后，每一次修改都会成为不可覆盖的版本。"></textarea>
             <article class="reader hidden" id="reader"></article>
+            <div class="translation-toolbar">
+              <button class="button ghost small" id="translateButton" type="button">翻译成英文</button>
+              <span id="translationHint">点击后将当前正文发送给已配置的 AI 服务，可能产生费用。</span>
+            </div>
+            <section class="translation-panel hidden" id="translationPanel" aria-label="参考译文">
+              <div class="translation-panel-head">
+                <h3>参考译文</h3>
+                <div class="translation-actions">
+                  <button class="button ghost small hidden" id="translationCancelButton" type="button">取消</button>
+                  <button class="button ghost small hidden" id="translationRetryButton" type="button">重新翻译</button>
+                  <button class="button ghost small hidden" id="translationCopyButton" type="button">复制英文</button>
+                </div>
+              </div>
+              <div class="translation-columns">
+                <div><h4>本次原文</h4><p id="translationSource"></p></div>
+                <div><h4>英文译文</h4><p id="translationOutput"></p></div>
+              </div>
+              <p class="translation-status" id="translationStatus" aria-live="polite"></p>
+            </section>
           </section>
         </section>
 
@@ -513,6 +533,15 @@ const feedViewButton = getElement<HTMLButtonElement>("feedViewButton");
 const overviewViewButton = getElement<HTMLButtonElement>("overviewViewButton");
 const editor = getElement<HTMLTextAreaElement>("editor");
 const reader = getElement<HTMLElement>("reader");
+const translateButton = getElement<HTMLButtonElement>("translateButton");
+const translationHint = getElement<HTMLElement>("translationHint");
+const translationPanel = getElement<HTMLElement>("translationPanel");
+const translationSource = getElement<HTMLElement>("translationSource");
+const translationOutput = getElement<HTMLElement>("translationOutput");
+const translationStatus = getElement<HTMLElement>("translationStatus");
+const translationCancelButton = getElement<HTMLButtonElement>("translationCancelButton");
+const translationRetryButton = getElement<HTMLButtonElement>("translationRetryButton");
+const translationCopyButton = getElement<HTMLButtonElement>("translationCopyButton");
 const writingWorkspace = getElement<HTMLElement>("writingWorkspace");
 const feedView = getElement<HTMLElement>("feedView");
 const overviewView = getElement<HTMLElement>("overviewView");
@@ -568,6 +597,7 @@ const storageHealthText = getElement<HTMLElement>("storageHealthText");
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
 let storageDialogMode: StorageDialogMode = "notice";
+const translationController = new TranslationController(getTranslationSource, fetchTranslation, renderTranslation);
 
 jsonSchemaContent.textContent = getAnalysisPrompt();
 installAutomationApi();
@@ -581,9 +611,17 @@ editor.addEventListener("input", () => {
   }
 
   state = updateDraft(state, editor.value);
+  translationController.invalidate();
   persistDraftState(state);
   renderInputState();
 });
+
+translateButton.addEventListener("click", () => { void translationController.start(); });
+translationCancelButton.addEventListener("click", () => translationController.invalidate());
+translationRetryButton.addEventListener("click", () => { void translationController.start(); });
+translationCopyButton.addEventListener("click", () => { void copyTranslation(); });
+window.addEventListener("online", renderTranslation);
+window.addEventListener("offline", renderTranslation);
 
 todayButton.addEventListener("click", () => {
   state = ensureTodayEntry(pruneHistoricalEmptyEntries(state));
@@ -800,6 +838,9 @@ function saveActiveVersion(): void {
 
 function render(): void {
   const activeEntry = getActiveEntry(state);
+  if (!isTranslationStateCurrent(translationController.state)) {
+    translationController.invalidate();
+  }
 
   dateTitle.textContent = formatDisplayDate(activeEntry.date_key);
   writeViewButton.classList.toggle("active", view === "write");
@@ -839,6 +880,7 @@ function render(): void {
   renderTimeline(activeEntry);
   renderReader(activeEntry);
   renderDailySummary(activeEntry);
+  renderTranslation();
 }
 
 function renderInputState(): void {
@@ -846,6 +888,72 @@ function renderInputState(): void {
   const canEdit = canEditActiveEntry();
   newPracticeButton.disabled = !isTodayEntry(activeEntry) || hasEmptyTodayPractice();
   renderEditorMetrics(activeEntry, activeEntry.draft, canEdit);
+  renderTranslation();
+}
+
+function getTranslationSource(): TranslationSource | null {
+  if (view !== "write") return null;
+  const entry = getActiveEntry(state);
+  if (detailMode === "version") {
+    const version = getSelectedVersion(entry);
+    return version ? { entryId: entry.entry_id, mode: "version", versionId: version.version_id, text: version.content } : null;
+  }
+  return { entryId: entry.entry_id, mode: "writing", versionId: null, text: entry.draft };
+}
+
+function isTranslationStateCurrent(translationState: TranslationState): boolean {
+  if (translationState.kind === "idle") return true;
+  const current = getTranslationSource();
+  const source = translationState.source;
+  return current !== null && current.entryId === source.entryId && current.mode === source.mode && current.versionId === source.versionId && current.text === source.text;
+}
+
+function renderTranslation(): void {
+  const source = getTranslationSource();
+  const translationState = translationController.state;
+  const empty = !source?.text.trim();
+  const tooLong = source !== null && [...source.text].length > maxTranslationCodepoints;
+  const offline = navigator.onLine === false;
+  translateButton.disabled = empty || tooLong || offline || translationState.kind === "loading";
+  translationHint.textContent = empty
+    ? "写下内容后即可翻译。"
+    : tooLong
+      ? "正文过长，请缩短后再翻译。"
+      : offline
+        ? "翻译需要联网；写作与版本仍可在本地使用。"
+        : "点击后将当前正文发送给已配置的 AI 服务，可能产生费用。";
+
+  translationPanel.classList.toggle("hidden", translationState.kind === "idle");
+  translationCancelButton.classList.toggle("hidden", translationState.kind !== "loading");
+  translationRetryButton.classList.toggle("hidden", translationState.kind !== "success" && translationState.kind !== "error");
+  translationCopyButton.classList.toggle("hidden", translationState.kind !== "success");
+  translationRetryButton.textContent = translationState.kind === "error" ? "重试" : "重新翻译";
+  translationRetryButton.disabled = offline;
+  translationStatus.setAttribute("role", translationState.kind === "error" ? "alert" : "status");
+  if (translationState.kind === "idle") {
+    translationSource.textContent = "";
+    translationOutput.textContent = "";
+    translationStatus.textContent = "";
+    return;
+  }
+  translationSource.textContent = translationState.source.text;
+  translationOutput.textContent = translationState.kind === "success" ? translationState.translation : "";
+  translationStatus.textContent = translationState.kind === "loading"
+    ? "正在翻译…"
+    : translationState.kind === "error"
+      ? translationState.message
+      : "译文仅供参考，可复制后自行修改原文。";
+}
+
+async function copyTranslation(): Promise<void> {
+  const translationState = translationController.state;
+  if (translationState.kind !== "success") return;
+  try {
+    await navigator.clipboard.writeText(translationState.translation);
+    translationStatus.textContent = "英文译文已复制。";
+  } catch {
+    translationStatus.textContent = "复制失败，请手动选择译文复制。";
+  }
 }
 
 function renderEditorMetrics(activeEntry: DailyEntry, activeContent: string, canEdit: boolean): void {
