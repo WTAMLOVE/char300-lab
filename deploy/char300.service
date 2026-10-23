@@ -1,0 +1,14 @@
+[Unit]
+Description=Zhuzi site and translation API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/github/char300-lab
+ExecStart=/usr/bin/fnm exec --using=v22 node --env-file-if-exists=.env server/index.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

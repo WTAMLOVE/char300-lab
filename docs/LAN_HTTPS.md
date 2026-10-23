@@ -28,7 +28,14 @@
    pnpm run start
    ```
 
-   让 Node 进程长期运行。它提供整个构建后的站点，Caddy 只负责 HTTPS 入口与反向代理。修改页面后需重新构建，修改服务端配置后需重启 Node 服务。
+   让 Node 进程长期运行。当前 Fedora 主机可使用仓库中的 `deploy/char300.service` 作为用户级 systemd 服务：
+
+   ```bash
+   systemctl --user link "$PWD/deploy/char300.service"
+   systemctl --user enable --now char300.service
+   ```
+
+   该服务通过 fnm 选用已安装的 Node.js 22；服务文件的工作目录对应本仓库当前的 `/home/sun/workspace/github/char300-lab`，若移动项目需同步修改。Caddy 只负责 HTTPS 入口与反向代理。修改页面后需重新构建，修改 `.env` 后需运行 `systemctl --user restart char300.service`。未配置 AI 变量时，站点正常提供写作功能，翻译请求返回配置提示。
 
 3. 在另一终端安装并启动 Caddy。Fedora 可在项目根目录运行以下脚本；它会通过 `dnf` 安装 Caddy、备份已有的系统 Caddyfile、安装本项目配置、启动系统服务，并输出本地 CA 根证书指纹与 HTTPS 校验结果。运行时需要本机 sudo 权限：
 
