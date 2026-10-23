@@ -154,3 +154,14 @@ test("HTTP endpoint maps upstream rate limiting and timeout to stable errors", a
   assert.equal(response.status, 504);
   assert.equal(response.json().error.code, "UPSTREAM_TIMEOUT");
 });
+
+test("upstream authentication failure is distinct from missing AI configuration", async () => {
+  for (const upstreamStatus of [401, 403]) {
+    const response = await createHarness({ config, fetchImpl: async () => new Response("", { status: upstreamStatus }) })({ text: "正文" });
+    assert.equal(response.status, 503);
+    assert.deepEqual(response.json().error, {
+      code: "UPSTREAM_AUTH_ERROR",
+      message: "AI 接口拒绝访问，请检查服务商地址和密钥。"
+    });
+  }
+});

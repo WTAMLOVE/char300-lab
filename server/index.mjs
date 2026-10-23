@@ -89,7 +89,9 @@ const server = createServer((req, res) => {
   if (req.method === "HEAD") {
     res.end();
   } else {
-    createReadStream(file).pipe(res);
+    const stream = createReadStream(file);
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
   }
 });
 

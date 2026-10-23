@@ -8,6 +8,7 @@ const errors = {
   INPUT_TOO_LONG: [413, "正文过长，请缩短后重试。"],
   RATE_LIMITED: [429, "请求过于频繁，请稍后重试。"],
   UPSTREAM_ERROR: [502, "翻译服务暂时不可用，请稍后重试。"],
+  UPSTREAM_AUTH_ERROR: [503, "AI 接口拒绝访问，请检查服务商地址和密钥。"],
   UPSTREAM_TIMEOUT: [504, "翻译超时，请稍后重试。"],
   SERVICE_UNAVAILABLE: [503, "请先在服务器配置 AI 接口，再使用翻译功能。"],
   FORBIDDEN: [403, "无法处理此请求。"]

@@ -41,7 +41,7 @@ printf '本地 CA 根证书：%s\n' "$root_cert"
 openssl x509 -in "$root_cert" -noout -subject -fingerprint -sha256
 
 printf '\n验证 char300.com 的 TLS 连接（后端未启动时 HTTP 状态可能是 502）：\n'
-curl --silent --show-error --resolve char300.com:443:127.0.0.1 \
+curl --noproxy '*' --silent --show-error --resolve char300.com:443:127.0.0.1 \
   --cacert "$root_cert" --output /dev/null \
   --write-out 'HTTP %{http_code}; TLS verification %{ssl_verify_result}\n' \
   https://char300.com/

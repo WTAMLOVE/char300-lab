@@ -99,7 +99,7 @@ export async function requestTranslation(text, config, { fetchImpl = fetch, sign
     throw new ProviderError("RATE_LIMITED");
   }
   if (!response.ok) {
-    throw new ProviderError(response.status === 401 || response.status === 403 ? "SERVICE_UNAVAILABLE" : "UPSTREAM_ERROR");
+    throw new ProviderError(response.status === 401 || response.status === 403 ? "UPSTREAM_AUTH_ERROR" : "UPSTREAM_ERROR");
   }
 
   let body;
