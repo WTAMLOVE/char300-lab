@@ -4,16 +4,16 @@ import logoDarkUrl from "./assets/logo-dark.svg";
 import logoUrl from "./assets/logo.svg";
 import shareLogoDarkUrl from "./assets/share-logo-dark.svg";
 import shareLogoUrl from "./assets/share-logo.svg";
-import { addBackupJsonFiles, createAnalysisBackupPayload, generateCompressedZip, readBackupPayload } from "./backup";
+import { addBackupJsonFiles, createAnalysisBackupPayload, generateCompressedZip, readBackupPayload, hasMarkdownContent, renderEntryMarkdownText } from "./backup";
 import { alignDiffToContent, summarizeDiff } from "./diff";
 import { getTokenStats } from "./tokenizer";
-import { fetchTranslation, maxTranslationCodepoints, TranslationController, type TranslationSource, type TranslationState } from "./translation";
+import { fetchTranslation, maxTranslationCodepoints, TranslationWorkspace, type TranslationSource, type TranslationState } from "./translation";
 import type { AppState, DailyEntry, DiffUnit, Version } from "./types";
 import { getOverviewExportBarLayout, getOverviewMonthMarkers, getRevisionTotals, overviewExportTrackWidth } from "./overview-layout";
 import { dailyShareLineHeight, getDailyShareLayout } from "./share-card-layout";
 import { layoutShareText, type ShareTextLine } from "./share-text-layout";
 import { dateKeyInRange, getWritingYearRange, getWritingYears, writingYearDays, type WritingYear } from "./writing-years";
-import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
+import { canOfferOpfsUpgrade, createTodayPractice, dismissOpfsUpgradePrompt, ensureTodayEntry, getActiveEntry, getFinalVersion, getStorageStatus, hydrateOpfsStorage, isOpfsStorageActive, loadState, parseImportedState, persistDraftState, persistState, pruneHistoricalEmptyEntries, saveTranslation, saveVersion, shouldShowOpfsUpgradePrompt, subscribeStorageStatus, subscribePersistence, switchEntry, todayKey, updateDraft, upgradeToOpfsStorage } from "./store";
 
 const appName = "逐字";
 const appSlogan = "让每一次修改都被看见";
@@ -24,6 +24,12 @@ const themePreferenceKey = "zhuzi-theme-preference-v1";
 const writingYearGoalDays = writingYearDays;
 const writingMilestones = [3, 7, 10, 14, 21, 30, 45, 60, 75, 90, 100, 120, 150, 180, 210, 240, 270, 300, 330, 365];
 const changelog: ChangelogEntry[] = [
+  {
+    version: "0.5.0",
+    date: "2026-10-25",
+    title: "译文保存与对照阅读",
+    items: ["翻译与查看已保存译文共用大面积原文、英文对照阅读区，可返回原编辑位置。", "每篇可手动保存一份译文，再次保存覆盖；随本地档案、ZIP、JSON 和 Markdown 导出。"]
+  },
   {
     version: "0.4.0",
     date: "2026-10-24",
@@ -130,6 +136,7 @@ const analysisPrompt = `你是一名写作行为分析助手。你将收到“�
 分析数据时请遵守以下规则：
 
 * 每个 state.entries 项代表一篇练习；忽略没有保存版本的空练习。
+* saved_translation 是本篇手动保存的英文参考文本，可能不对应当前正文；不属于写作版本，不纳入字数、修改量与写作风格分析。
 * 在同一篇练习内，按 versions[].created_at 的时间顺序比较相邻版本。
 * 以 versions[].content 的完整文本为依据；diff_summary 只用于辅助核对增删趋势，不能代替实际文本比较。
 * 只把跨多篇练习反复出现的现象概括为稳定习惯。证据不足时请明确说明，不要用单篇或单次修改推断长期倾向。
@@ -378,23 +385,10 @@ app.innerHTML = `
             <article class="reader hidden" id="reader"></article>
             <div class="translation-toolbar">
               <button class="button ghost small" id="translateButton" type="button">翻译成英文</button>
+              <button class="button ghost small hidden" id="translationViewButton" type="button">查看已保存译文</button>
               <span id="translationHint">点击后将当前正文发送给已配置的 AI 服务，可能产生费用。</span>
             </div>
-            <section class="translation-panel hidden" id="translationPanel" aria-label="参考译文">
-              <div class="translation-panel-head">
-                <h3>参考译文</h3>
-                <div class="translation-actions">
-                  <button class="button ghost small hidden" id="translationCancelButton" type="button">取消</button>
-                  <button class="button ghost small hidden" id="translationRetryButton" type="button">重新翻译</button>
-                  <button class="button ghost small hidden" id="translationCopyButton" type="button">复制英文</button>
-                </div>
-              </div>
-              <div class="translation-columns">
-                <div><h4>本次原文</h4><p id="translationSource"></p></div>
-                <div><h4>英文译文</h4><p id="translationOutput"></p></div>
-              </div>
-              <p class="translation-status" id="translationStatus" aria-live="polite"></p>
-            </section>
+
           </section>
         </section>
 
@@ -409,6 +403,34 @@ app.innerHTML = `
           <div class="timeline" id="timeline"></div>
           <div class="diff-summary" id="diffSummary"></div>
         </aside>
+        <section class="translation-panel hidden" id="translationPanel" aria-label="翻译对照阅读">
+          <div class="translation-panel-head">
+            <div>
+              <button class="button ghost small" id="translationBackButton" type="button">返回编辑</button>
+              <span class="muted">返回后未保存的译文将丢失</span>
+              <h2 id="translationTitle" tabindex="-1">原文与英文对照</h2>
+              <p id="translationContext"></p>
+            </div>
+            <div class="translation-actions">
+              <button class="button ghost small hidden" id="translationCancelButton" type="button">取消</button>
+              <button class="button ghost small" id="translationRetryButton" type="button">重新翻译</button>
+              <button class="button ghost small hidden" id="translationCopyButton" type="button">复制英文</button>
+              <button class="button primary small hidden" id="translationSaveButton" type="button">保存译文</button>
+            </div>
+          </div>
+          <div class="translation-tabs" role="group" aria-label="译文内容">
+            <button class="button small" id="translationCurrentTab" type="button">本次译文</button>
+            <button class="button small" id="translationSavedTab" type="button">已保存译文</button>
+          </div>
+          <p class="muted">每篇只保留一份，再次保存会覆盖；已保存译文不一定对应当前正文。</p>
+          <p class="muted">点击翻译后将当前正文发送给已配置的 AI 服务，可能产生费用。重新翻译会清除未保存的本次结果。</p>
+          <div class="translation-columns">
+            <section><h3 id="translationSourceLabel">本次原文</h3><p id="translationSource" tabindex="0"></p></section>
+            <section><h3 id="translationOutputLabel">英文译文</h3><p id="translationOutput" tabindex="0"></p></section>
+          </div>
+          <p class="translation-status" id="translationStatus" aria-live="polite"></p>
+          <p class="translation-status" id="translationSaveStatus" aria-live="polite"></p>
+        </section>
       </section>
     </section>
 
@@ -606,7 +628,34 @@ const storageHealthText = getElement<HTMLElement>("storageHealthText");
 const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themePreference = loadThemePreference();
 let storageDialogMode: StorageDialogMode = "notice";
-const translationController = new TranslationController(getTranslationSource, fetchTranslation, renderTranslation);
+const translationWorkspace = new TranslationWorkspace(getTranslationSource, fetchTranslation, renderTranslation);
+const translationController = translationWorkspace.controller;
+const workspaceElement = document.querySelector<HTMLElement>(".workspace")!;
+const translationViewButton = getElement<HTMLButtonElement>("translationViewButton");
+const translationSaveButton = getElement<HTMLButtonElement>("translationSaveButton");
+const translationBackButton = getElement<HTMLButtonElement>("translationBackButton");
+const translationTitle = getElement<HTMLElement>("translationTitle");
+const translationContext = getElement<HTMLElement>("translationContext");
+const translationCurrentTab = getElement<HTMLButtonElement>("translationCurrentTab");
+const translationSavedTab = getElement<HTMLButtonElement>("translationSavedTab");
+const translationSaveStatus = getElement<HTMLElement>("translationSaveStatus");
+let storageReady = false;
+let translationReturn: { source: TranslationSource; start: number; end: number; scroll: number; readerScroll: number; pageY: number; trigger: HTMLElement } | null = null;
+const translationSaves = new Map<string, { text: string; kind: "saving" | "error" | "saved" | "fallback" }>();
+const translationSizeObserver = new ResizeObserver(() => {
+  document.body.classList.toggle("translation-stacked", translationWorkspace.source !== null && translationPanel.clientWidth < 752);
+});
+translationSizeObserver.observe(translationPanel);
+subscribePersistence((result) => {
+  if (result.kind === "save-error") return;
+  for (const entry of result.state.entries) {
+    const pending = translationSaves.get(entry.entry_id);
+    if (pending && pending.text === entry.saved_translation) {
+      pending.kind = result.kind === "local-fallback" ? "fallback" : "saved";
+    }
+  }
+  renderTranslation();
+});
 
 jsonSchemaContent.textContent = getAnalysisPrompt();
 installAutomationApi();
@@ -625,14 +674,20 @@ editor.addEventListener("input", () => {
   renderInputState();
 });
 
-translateButton.addEventListener("click", () => { void translationController.start(); });
-translationCancelButton.addEventListener("click", () => translationController.invalidate());
-translationRetryButton.addEventListener("click", () => { void translationController.start(); });
+translateButton.addEventListener("click", () => openTranslation("current"));
+translationViewButton.addEventListener("click", () => openTranslation("saved"));
+translationBackButton.addEventListener("click", () => leaveTranslation(true));
+translationCurrentTab.addEventListener("click", () => translationWorkspace.show("current"));
+translationSavedTab.addEventListener("click", () => translationWorkspace.show("saved"));
+translationSaveButton.addEventListener("click", () => { void saveVisibleTranslation(); });
+translationCancelButton.addEventListener("click", () => translationWorkspace.cancel());
+translationRetryButton.addEventListener("click", () => { void translationWorkspace.start(); });
 translationCopyButton.addEventListener("click", () => { void copyTranslation(); });
 window.addEventListener("online", renderTranslation);
 window.addEventListener("offline", renderTranslation);
 
 todayButton.addEventListener("click", () => {
+  leaveTranslation(false);
   state = ensureTodayEntry(pruneHistoricalEmptyEntries(state));
   selectedVersionId = getActiveEntry(state).current_version_id;
   detailMode = "writing";
@@ -643,6 +698,7 @@ todayButton.addEventListener("click", () => {
 });
 
 newPracticeButton.addEventListener("click", () => {
+  leaveTranslation(false);
   if (hasEmptyTodayPractice()) {
     return;
   }
@@ -788,16 +844,19 @@ colorSchemeQuery.addEventListener("change", () => {
 });
 
 writeViewButton.addEventListener("click", () => {
+  leaveTranslation(false);
   view = "write";
   render();
 });
 
 feedViewButton.addEventListener("click", () => {
+  leaveTranslation(false);
   view = "feed";
   render();
 });
 
 overviewViewButton.addEventListener("click", () => {
+  leaveTranslation(false);
   view = "overview";
   render();
 });
@@ -847,6 +906,7 @@ function saveActiveVersion(): void {
 }
 
 function render(): void {
+  if (translationWorkspace.source && !translationWorkspace.isCurrent) leaveTranslation(false);
   const activeEntry = getActiveEntry(state);
   if (!isTranslationStateCurrent(translationController.state)) {
     translationController.invalidate();
@@ -860,8 +920,8 @@ function render(): void {
   feedView.classList.toggle("hidden", view !== "feed");
   overviewView.classList.toggle("hidden", view !== "overview");
   exportImageButton.disabled = activeEntry.versions.length === 0;
-  exportDayMarkdownButton.disabled = activeEntry.versions.length === 0;
-  exportAllMarkdownButton.disabled = !state.entries.some((entry) => entry.versions.length > 0);
+  exportDayMarkdownButton.disabled = !hasMarkdownContent(activeEntry);
+  exportAllMarkdownButton.disabled = !state.entries.some(hasMarkdownContent);
 
   if (view === "feed") {
     renderFeed();
@@ -870,6 +930,13 @@ function render(): void {
 
   if (view === "overview") {
     renderOverview();
+    return;
+  }
+
+  if (translationWorkspace.source) {
+    renderHabitStats();
+    renderCalendarList();
+    renderTranslation();
     return;
   }
 
@@ -918,51 +985,116 @@ function isTranslationStateCurrent(translationState: TranslationState): boolean 
   return current !== null && current.entryId === source.entryId && current.mode === source.mode && current.versionId === source.versionId && current.text === source.text;
 }
 
+function openTranslation(display: "current" | "saved"): void {
+  const source = getTranslationSource();
+  if (!storageReady || !source) return;
+  if (display === "saved" && !getActiveEntry(state).saved_translation.trim()) return;
+  if (display === "current" && (!source.text.trim() || [...source.text].length > maxTranslationCodepoints || navigator.onLine === false)) return;
+  translationReturn = { source, start: editor.selectionStart, end: editor.selectionEnd, scroll: editor.scrollTop,
+    readerScroll: reader.scrollTop, pageY: window.scrollY, trigger: display === "current" ? translateButton : translationViewButton };
+  translationWorkspace.open(source, display);
+  translationTitle.focus({ preventScroll: true });
+  if (document.body.classList.contains("translation-stacked")) translationPanel.scrollIntoView({ block: "start" });
+  if (display === "current") void translationWorkspace.start();
+}
+
+function leaveTranslation(restore: boolean): void {
+  const context = translationReturn;
+  translationReturn = null;
+  translationWorkspace.close();
+  if (restore && context && getTranslationSource()?.entryId === context.source.entryId) {
+    editor.setSelectionRange(context.start, context.end);
+    editor.scrollTop = context.scroll;
+    reader.scrollTop = context.readerScroll;
+    context.trigger.focus({ preventScroll: true });
+    window.scrollTo(0, context.pageY);
+  }
+}
+
 function renderTranslation(): void {
   const source = getTranslationSource();
-  const translationState = translationController.state;
-  const empty = !source?.text.trim();
-  const tooLong = source !== null && [...source.text].length > maxTranslationCodepoints;
-  const offline = navigator.onLine === false;
-  translateButton.disabled = empty || tooLong || offline || translationState.kind === "loading";
-  translationHint.textContent = empty
-    ? "写下内容后即可翻译。"
-    : tooLong
-      ? "正文过长，请缩短后再翻译。"
-      : offline
-        ? "翻译需要联网；写作与版本仍可在本地使用。"
-        : "点击后将当前正文发送给已配置的 AI 服务，可能产生费用。";
+  const result = translationController.state;
+  const entry = getActiveEntry(state);
+  const saved = entry.saved_translation;
+  const active = translationWorkspace.source !== null && view === "write";
+  const canRequest = Boolean(storageReady && source?.text.trim() && [...source.text].length <= maxTranslationCodepoints && navigator.onLine !== false);
+  translateButton.disabled = !canRequest || result.kind === "loading";
+  translationViewButton.classList.toggle("hidden", !saved.trim());
+  translationViewButton.disabled = !storageReady;
+  importZipButton.disabled = !storageReady;
+  translationHint.textContent = !storageReady ? "正在恢复本地档案…" : !source?.text.trim() ? "写下内容后即可翻译。"
+    : [...source.text].length > maxTranslationCodepoints ? "正文过长，请缩短后再翻译。"
+    : navigator.onLine === false ? "翻译需要联网；已保存译文可离线查看。" : "点击后将当前正文发送给已配置的 AI 服务，可能产生费用。";
+  workspaceElement.classList.toggle("translation-mode", active);
+  document.body.classList.toggle("translation-reading", active);
+  document.body.classList.toggle("translation-stacked", active && translationPanel.clientWidth < 752);
+  translationPanel.classList.toggle("hidden", !active);
+  if (!active) return;
+  document.body.classList.toggle("translation-stacked", translationPanel.clientWidth < 752);
+  const showingSaved = translationWorkspace.display === "saved";
+  const text = translationWorkspace.visibleText(saved);
+  const save = translationSaves.get(entry.entry_id);
+  const matchingSave = save?.text === saved ? save : undefined;
+  const failure = matchingSave?.kind === "error";
+  const saving = matchingSave?.kind === "saving";
+  const sameText = text === saved && Boolean(text);
+  translationBackButton.textContent = detailMode === "writing" ? "返回编辑" : "返回版本阅读";
+  const sourceVersionIndex = entry.versions.findIndex((version) => version.version_id === translationWorkspace.source?.versionId);
+  translationContext.textContent = `${entry.date_key} · ${getPracticeLabel(entry, getEntriesForDate(entry.date_key))} · ${detailMode === "writing" ? "草稿" : `历史版本 V${sourceVersionIndex + 1}`}`;
+  translationCurrentTab.classList.toggle("hidden", result.kind === "idle" && !translationWorkspace.cancelled);
+  translationSavedTab.classList.toggle("hidden", !saved.trim());
+  translationCurrentTab.setAttribute("aria-pressed", String(!showingSaved));
+  translationSavedTab.setAttribute("aria-pressed", String(showingSaved));
+  translationCancelButton.classList.toggle("hidden", result.kind !== "loading");
+  translationRetryButton.disabled = !canRequest || result.kind === "loading";
+  translationRetryButton.textContent = result.kind === "error" || translationWorkspace.cancelled ? "重试" : "重新翻译";
+  translationCopyButton.classList.toggle("hidden", !text);
+  const retrySaved = showingSaved && failure;
+  translationSaveButton.classList.toggle("hidden", !translationWorkspace.canSave && !retrySaved);
+  translationSaveButton.disabled = saving || (sameText && !failure);
+  translationSaveButton.textContent = saving ? "正在保存…" : retrySaved ? "重试本地保存" : sameText && !failure ? "已保存" : saved ? "覆盖保存译文" : "保存译文";
+  getElement<HTMLElement>("translationSourceLabel").textContent = showingSaved ? "进入时的原文（可能与译文不同）" : "本次原文";
+  getElement<HTMLElement>("translationOutputLabel").textContent = showingSaved ? "本篇已保存译文" : "本次英文译文";
+  const sourceText = translationWorkspace.source?.text || "当前暂无原文";
+  if (translationSource.textContent !== sourceText) translationSource.textContent = sourceText;
+  if (translationOutput.textContent !== text) translationOutput.textContent = text;
+  translationStatus.setAttribute("role", !showingSaved && result.kind === "error" ? "alert" : "status");
+  translationStatus.textContent = showingSaved ? "本地保存的参考译文，可能不对应左侧原文。"
+    : result.kind === "loading" ? "正在翻译…" : result.kind === "error" ? result.message
+    : translationWorkspace.cancelled ? "已取消，可重试或返回。" : "译文仅供参考，不改写原文。";
+  translationSaveStatus.textContent = saving ? "正在保存译文…" : failure ? "译文保存失败，请重试或导出备份。"
+    : matchingSave?.kind === "fallback" ? "已保存到本地兼容存储。" : sameText ? "译文已保存。" : "";
+  translationSaveStatus.setAttribute("role", failure ? "alert" : "status");
+}
 
-  translationPanel.classList.toggle("hidden", translationState.kind === "idle");
-  translationCancelButton.classList.toggle("hidden", translationState.kind !== "loading");
-  translationRetryButton.classList.toggle("hidden", translationState.kind !== "success" && translationState.kind !== "error");
-  translationCopyButton.classList.toggle("hidden", translationState.kind !== "success");
-  translationRetryButton.textContent = translationState.kind === "error" ? "重试" : "重新翻译";
-  translationRetryButton.disabled = offline;
-  translationStatus.setAttribute("role", translationState.kind === "error" ? "alert" : "status");
-  if (translationState.kind === "idle") {
-    translationSource.textContent = "";
-    translationOutput.textContent = "";
-    translationStatus.textContent = "";
-    return;
-  }
-  translationSource.textContent = translationState.source.text;
-  translationOutput.textContent = translationState.kind === "success" ? translationState.translation : "";
-  translationStatus.textContent = translationState.kind === "loading"
-    ? "正在翻译…"
-    : translationState.kind === "error"
-      ? translationState.message
-      : "译文仅供参考，可复制后自行修改原文。";
+async function saveVisibleTranslation(): Promise<void> {
+  if (!storageReady || !translationWorkspace.isCurrent) return;
+  const entry = getActiveEntry(state);
+  const previous = translationSaves.get(entry.entry_id);
+  const retry = translationWorkspace.display === "saved" && previous?.kind === "error" && previous.text === entry.saved_translation;
+  if ((!translationWorkspace.canSave && !retry) || previous?.kind === "saving") return;
+  const text = translationWorkspace.visibleText(entry.saved_translation);
+  if (!text.trim()) return;
+  const receipt = { text, kind: "saving" as "saving" | "error" | "saved" | "fallback" };
+  translationSaves.set(entry.entry_id, receipt);
+  state = saveTranslation(state, entry.entry_id, text);
+  renderTranslation();
+  const persisted = await persistState(state);
+  if (translationSaves.get(entry.entry_id) !== receipt) return;
+  const storedText = persisted.state.entries.find((item) => item.entry_id === entry.entry_id)?.saved_translation;
+  receipt.kind = persisted.kind === "save-error" || storedText !== text ? "error" : persisted.kind === "local-fallback" ? "fallback" : "saved";
+  renderTranslation();
 }
 
 async function copyTranslation(): Promise<void> {
-  const translationState = translationController.state;
-  if (translationState.kind !== "success") return;
+  const text = translationWorkspace.visibleText(getActiveEntry(state).saved_translation);
+  if (!text) return;
+  const context = translationReturn;
   try {
-    await navigator.clipboard.writeText(translationState.translation);
-    translationStatus.textContent = "英文译文已复制。";
+    await navigator.clipboard.writeText(text);
+    if (translationReturn === context && translationWorkspace.visibleText(getActiveEntry(state).saved_translation) === text) translationStatus.textContent = "英文译文已复制。";
   } catch {
-    translationStatus.textContent = "复制失败，请手动选择译文复制。";
+    if (translationReturn === context && translationWorkspace.visibleText(getActiveEntry(state).saved_translation) === text) translationStatus.textContent = "复制失败，请手动选择译文复制。";
   }
 }
 
@@ -1022,7 +1154,9 @@ function registerServiceWorker(): void {
 
 async function hydrateActiveStorage(): Promise<void> {
   const opfsState = await hydrateOpfsStorage(state);
+  storageReady = true;
   if (!opfsState) {
+    renderTranslation();
     return;
   }
 
@@ -1039,6 +1173,8 @@ async function hydrateActiveStorage(): Promise<void> {
 
 async function initializeStorageAndPrompts(): Promise<void> {
   if (shouldShowOpfsUpgradePrompt()) {
+    storageReady = true;
+    renderTranslation();
     showStorageUpgradePrompt();
     return;
   }
@@ -1178,7 +1314,7 @@ function showStorageDialog(mode: StorageDialogMode): void {
     storageDialogKicker.textContent = "Local Storage";
     storageDialogTitle.textContent = "写作内容只保存在当前浏览器";
     storageDialogBodyPrimary.textContent = "文章平时保存在当前浏览器、当前访问地址对应的本地存储中，不会自动上传。只有你点击“翻译成英文”时，本次正文才会发送给已配置的 AI 服务。换浏览器、换地址、清理站点数据或使用无痕模式，都可能导致本地内容不可见。";
-    storageDialogBodySecondary.textContent = "认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。译文不随备份保存。";
+    storageDialogBodySecondary.textContent = "认真写作前，建议定期使用“导出 → 完整数据 ZIP”备份。手动保存的译文随备份保存，每篇保留一份；未保存的结果离开阅读模式后消失。";
     storageDialogPrimaryButton.textContent = "我知道了";
   }
 
@@ -1306,6 +1442,7 @@ function renderPracticeTabs(activeEntry: DailyEntry): void {
 
   practiceTabs.querySelectorAll<HTMLButtonElement>(".practice-tab[data-entry-id]").forEach((button) => {
     button.addEventListener("click", () => {
+      leaveTranslation(false);
       state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
@@ -1416,6 +1553,7 @@ function renderCalendarList(): void {
       return;
     }
     button.addEventListener("click", () => {
+      leaveTranslation(false);
       state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
@@ -1546,6 +1684,7 @@ function renderFeed(): void {
 
   feedList.querySelectorAll<HTMLButtonElement>(".feed-date").forEach((button) => {
     button.addEventListener("click", () => {
+      leaveTranslation(false);
       state = switchEntry(state, button.dataset.entryId ?? state.active_entry_id);
       selectedVersionId = getActiveEntry(state).current_version_id;
       detailMode = "writing";
@@ -1928,7 +2067,7 @@ function exportDayMarkdown(entry: DailyEntry): void {
 }
 
 function exportAllMarkdown(): void {
-  const writtenEntries = getWrittenEntries();
+  const writtenEntries = state.entries.filter(hasMarkdownContent);
   const markdown = [`# 逐字`, "", appSlogan, "", `导出时间：${new Date().toISOString()}`, "", ...writtenEntries.map(renderEntryMarkdown)].join("\n");
   downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), `逐字-全部-${todayKey()}.md`);
 }
@@ -1969,7 +2108,7 @@ function exportJsonBackup(): void {
 
 async function exportZipBackup(): Promise<void> {
   const zip = new JSZip();
-  const writtenEntries = getWrittenEntries();
+  const writtenEntries = state.entries.filter(hasMarkdownContent);
   const payload = createBackupPayload();
 
   addBackupJsonFiles(zip, payload);
@@ -2018,7 +2157,8 @@ async function importBackup(file: File): Promise<void> {
       return;
     }
 
-    translationController.invalidate();
+    leaveTranslation(false);
+    translationSaves.clear();
     state = ensureTodayEntry(importedState);
     resetDerivedCaches();
     persistState(state);
@@ -2057,36 +2197,12 @@ function showStorageUpgradeStatus(message: string, tone: "error" | "info"): void
 }
 
 function renderEntryMarkdown(entry: DailyEntry): string {
-  const first = entry.versions[0];
-  const last = entry.versions.at(-1);
-  if (!first || !last) {
-    return "";
-  }
-
-  const summary = getEntrySummary(entry);
-  const sameDayEntries = getEntriesForDate(entry.date_key);
-  const label = getPracticeLabel(entry, sameDayEntries);
-  const lines = [
-    `## ${entry.date_key} · ${label}`,
-    "",
-    `${last.token_stats.total_units}/300`,
-    "",
-    last.content || "空白版本",
-    "",
-    `文字 +${textInsertCount(summary)} -${textDeleteCount(summary)} · 标点 +${summary.punctuation.insert} -${summary.punctuation.delete} · 迭代 ${entry.versions.length}`,
-    "",
-    "### 版本",
-    ""
-  ];
-
   const checkCrossDayVersions = hasCrossDayVersions(entry);
-  entry.versions.forEach((version, index) => {
+  const descriptions = entry.versions.map((version, index) => {
     const crossDay = checkCrossDayVersions && isCrossDayVersion(entry, version) ? " · 跨天版本" : "";
-    lines.push(`- V${index + 1} · ${formatDateTime(version.created_at)} · ${version.token_stats.total_units}/300${crossDay}`);
+    return `- V${index + 1} · ${formatDateTime(version.created_at)} · ${version.token_stats.total_units}/300${crossDay}`;
   });
-
-  lines.push("");
-  return lines.join("\n");
+  return renderEntryMarkdownText(entry, getPracticeLabel(entry, getEntriesForDate(entry.date_key)), descriptions);
 }
 
 function renderEntrySummaryChips(entry: DailyEntry): string {
@@ -2479,7 +2595,7 @@ function isTodayEntry(entry: DailyEntry): boolean {
 
 function canEditActiveEntry(): boolean {
   const activeEntry = getActiveEntry(state);
-  return detailMode === "writing" && (isTodayEntry(activeEntry) || historyEditUnlockedEntryId === activeEntry.entry_id);
+  return !translationWorkspace.source && detailMode === "writing" && (isTodayEntry(activeEntry) || historyEditUnlockedEntryId === activeEntry.entry_id);
 }
 
 function hasEmptyTodayPractice(): boolean {
@@ -2487,7 +2603,7 @@ function hasEmptyTodayPractice(): boolean {
 }
 
 function isEmptyPractice(entry: DailyEntry): boolean {
-  return entry.versions.length === 0 && entry.draft.trim() === "";
+  return entry.versions.length === 0 && entry.draft.trim() === "" && !entry.saved_translation.trim();
 }
 
 function isCrossDayVersion(entry: DailyEntry, version: Version): boolean {

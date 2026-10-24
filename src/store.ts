@@ -35,7 +35,18 @@ const storageStatusListeners = new Set<() => void>();
 let pendingOpfsState: AppState | null = null;
 let opfsWritePromise: Promise<void> | null = null;
 let opfsWriteTimer: ReturnType<typeof setTimeout> | null = null;
-let lastLocalStorageWriteSucceeded = false;
+export type PersistenceResult = { kind: "opfs-saved" | "local-fallback" | "save-error"; state: AppState };
+type WriteReceipt = (result: PersistenceResult) => void;
+let pendingReceipts: WriteReceipt[] = [];
+const persistenceListeners = new Set<(result: PersistenceResult) => void>();
+export function subscribePersistence(listener: (result: PersistenceResult) => void): () => void {
+  persistenceListeners.add(listener);
+  return () => persistenceListeners.delete(listener);
+}
+function reportPersistence(result: PersistenceResult): PersistenceResult {
+  persistenceListeners.forEach((listener) => listener(result));
+  return result;
+}
 
 type LegacyDraftJournal = {
   entry_id: string;
@@ -68,7 +79,8 @@ export function createEntry(key = todayKey(), createdAt = new Date().toISOString
     optional_title: key,
     versions: [],
     draft: "",
-    lastSavedContent: ""
+    lastSavedContent: "",
+    saved_translation: ""
   };
 }
 
@@ -93,6 +105,13 @@ export function createEmptyState(): AppState {
 
 export function loadState(): AppState {
   hadLegacyArticleDataAtStartup = false;
+  opfsWriteEnabled = false;
+  opfsStorageHealthy = false;
+  if (opfsWriteTimer !== null) {
+    clearTimeout(opfsWriteTimer);
+    opfsWriteTimer = null;
+    pendingOpfsState = null;
+  }
   const raw = localStorage.getItem(storageKey);
   if (raw) {
     try {
@@ -126,31 +145,45 @@ export function loadState(): AppState {
 
 export function hasMeaningfulArticleData(state: AppState): boolean {
   return state.entries.some(
-    (entry) => entry.versions.length > 0 || entry.draft.length > 0 || entry.lastSavedContent.length > 0
+    (entry) => entry.versions.length > 0 || entry.draft.length > 0 || entry.lastSavedContent.length > 0 || entry.saved_translation.trim().length > 0
   );
 }
 
-export function persistState(state: AppState): void {
-  let localStorageSaved = false;
+function writeLocalSnapshot(state: AppState): boolean {
   try {
     localStorage.setItem(storageKey, JSON.stringify(state));
-    localStorageSaved = true;
-    lastLocalStorageWriteSucceeded = true;
-    localStorage.removeItem(draftJournalKey);
+    // A failed journal cleanup must not turn a successful full write into a failure.
+    try { localStorage.removeItem(draftJournalKey); } catch { /* full snapshot is durable */ }
+    return true;
   } catch {
-    localStorageSaved = false;
-    lastLocalStorageWriteSucceeded = false;
+    return false;
   }
+}
 
+export function persistState(state: AppState): Promise<PersistenceResult> {
+  const localSaved = writeLocalSnapshot(state);
   if (opfsWriteEnabled) {
-    scheduleOpfsWrite(state, true);
-    return;
+    return new Promise((resolve) => {
+      pendingReceipts.push(resolve);
+      scheduleOpfsWrite(state, true);
+    });
   }
+  const safe = localSaved && disableStaleOpfs();
+  const kind = safe ? "local-fallback" : "save-error";
+  setStorageStatus({ kind, lastSavedAt: safe ? new Date().toISOString() : storageStatus.lastSavedAt });
+  return Promise.resolve(reportPersistence({ kind, state }));
+}
 
-  setStorageStatus({
-    kind: localStorageSaved ? "local-fallback" : "save-error",
-    lastSavedAt: localStorageSaved ? new Date().toISOString() : storageStatus.lastSavedAt
-  });
+// Prevent a successful local fallback from being replaced by an older checkpoint at startup.
+function disableStaleOpfs(): boolean {
+  try {
+    if (localStorage.getItem(opfsUpgradeKey) === "upgraded") {
+      localStorage.setItem(opfsUpgradeKey, "failed" satisfies OpfsUpgradeState);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function persistDraftState(state: AppState): void {
@@ -167,10 +200,7 @@ export function persistDraftState(state: AppState): void {
       draftJournalKey,
       JSON.stringify(journal)
     );
-    lastLocalStorageWriteSucceeded = true;
-  } catch {
-    lastLocalStorageWriteSucceeded = false;
-  }
+  } catch { /* OPFS write below still attempts to preserve the draft. */ }
   scheduleOpfsWrite(state);
 }
 
@@ -291,17 +321,15 @@ export async function hydrateOpfsStorage(currentState: AppState): Promise<AppSta
     const recovered = applyDraftJournal(stored);
     try {
       localStorage.setItem(storageKey, JSON.stringify(recovered));
-      lastLocalStorageWriteSucceeded = true;
-    } catch {
-      lastLocalStorageWriteSucceeded = false;
-    }
+    } catch { /* OPFS remains the durable copy. */ }
     setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
     return recovered;
   } catch {
     opfsWriteEnabled = false;
     opfsStorageHealthy = false;
+    const safe = writeLocalSnapshot(currentState) && disableStaleOpfs();
     setStorageStatus({
-      kind: localStorage.getItem(storageKey) ? "local-fallback" : "save-error",
+      kind: safe ? "local-fallback" : "save-error",
       lastSavedAt: storageStatus.lastSavedAt
     });
     return null;
@@ -341,6 +369,13 @@ export function parseImportedState(payload: unknown): AppState | null {
   }
 
   return null;
+}
+
+export function saveTranslation(state: AppState, entryId: string, text: string): AppState {
+  if (!text.trim()) return state;
+  const target = state.entries.find((entry) => entry.entry_id === entryId);
+  if (!target || target.saved_translation === text) return state;
+  return { ...state, entries: state.entries.map((entry) => entry.entry_id === entryId ? { ...entry, saved_translation: text } : entry) };
 }
 
 export function saveVersion(state: AppState): AppState {
@@ -388,7 +423,7 @@ function updateActiveEntry(state: AppState, updater: (entry: DailyEntry) => Dail
 }
 
 function isEmptyPracticeEntry(entry: DailyEntry): boolean {
-  return entry.versions.length === 0 && entry.draft.trim() === "";
+  return entry.versions.length === 0 && entry.draft.trim() === "" && !entry.saved_translation.trim();
 }
 
 export function normalizeState(state: AppState): AppState {
@@ -497,21 +532,31 @@ function startOpfsWriteDrain(): void {
 }
 
 async function drainOpfsWrites(): Promise<void> {
-  try {
-    while (pendingOpfsState) {
-      const nextState = pendingOpfsState;
-      pendingOpfsState = null;
-      await writeOpfsState(nextState);
-    }
-    opfsStorageHealthy = true;
-    setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
-  } catch {
-    opfsStorageHealthy = false;
+  while (pendingOpfsState) {
+    const nextState = pendingOpfsState;
     pendingOpfsState = null;
-    setStorageStatus({
-      kind: lastLocalStorageWriteSucceeded ? "local-fallback" : "save-error",
-      lastSavedAt: lastLocalStorageWriteSucceeded ? new Date().toISOString() : storageStatus.lastSavedAt
-    });
+    const receipts = pendingReceipts;
+    pendingReceipts = [];
+    try {
+      await writeOpfsState(nextState);
+      opfsStorageHealthy = true;
+      setStorageStatus({ kind: "opfs-saved", lastSavedAt: new Date().toISOString() });
+      const result = reportPersistence({ kind: "opfs-saved", state: nextState });
+      receipts.forEach((resolve) => resolve(result));
+    } catch {
+      opfsStorageHealthy = false;
+      opfsWriteEnabled = false;
+      // A newer import or draft may have arrived while this checkpoint was writing.
+      const latestState = pendingOpfsState ?? nextState;
+      const allReceipts = [...receipts, ...pendingReceipts];
+      pendingOpfsState = null;
+      pendingReceipts = [];
+      const saved = writeLocalSnapshot(latestState) && disableStaleOpfs();
+      const kind = saved ? "local-fallback" : "save-error";
+      setStorageStatus({ kind, lastSavedAt: saved ? new Date().toISOString() : storageStatus.lastSavedAt });
+      const result = reportPersistence({ kind, state: latestState });
+      allReceipts.forEach((resolve) => resolve(result));
+    }
   }
 }
 
@@ -593,7 +638,8 @@ function normalizeEntry(entry: DailyEntry): DailyEntry {
     date_key: key,
     optional_title: typeof entry.optional_title === "string" ? entry.optional_title : key,
     draft: entry.draft ?? entry.lastSavedContent ?? "",
-    lastSavedContent: entry.lastSavedContent ?? entry.draft ?? ""
+    lastSavedContent: entry.lastSavedContent ?? entry.draft ?? "",
+    saved_translation: typeof entry.saved_translation === "string" && entry.saved_translation.trim() ? entry.saved_translation : ""
   };
   const versions = (entry.versions ?? []).map((version, index, versionsList) => {
     const { diff_summary: analysisDiffSummary, ...storedVersion } = version as Version & { diff_summary?: unknown };

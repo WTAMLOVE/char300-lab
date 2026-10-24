@@ -93,3 +93,68 @@ test("client shows the configuration prompt returned by an unconfigured server",
     globalThis.fetch = originalFetch;
   }
 });
+
+test("saved reading makes no request, keeps the selected source and copies visible text", async () => {
+  const { TranslationWorkspace } = await import("../src/translation.ts");
+  const source = { ...draft, mode: "version" as const, versionId: "old-version" };
+  let calls = 0;
+  const workspace = new TranslationWorkspace(() => source, async () => { calls++; return "New translation"; }, () => {});
+  workspace.open(source, "saved");
+  assert.equal(calls, 0);
+  assert.equal(workspace.visibleText("Saved translation"), "Saved translation");
+  assert.equal(workspace.canSave, false);
+  await workspace.start();
+  assert.equal(calls, 1);
+  assert.equal(workspace.source?.versionId, "old-version");
+  assert.equal(workspace.canSave, true);
+  workspace.show("saved");
+  assert.equal(workspace.visibleText("Saved translation"), "Saved translation");
+  assert.equal(workspace.canSave, false);
+  workspace.show("current");
+  assert.equal(workspace.visibleText("Saved translation"), "New translation");
+});
+
+test("a late translation never switches away from saved reading or reopens a closed workspace", async () => {
+  const { TranslationWorkspace } = await import("../src/translation.ts");
+  const pending = deferred<string>();
+  let signal: AbortSignal | undefined;
+  const workspace = new TranslationWorkspace(() => draft, async (_, abort) => { signal = abort; return pending.promise; }, () => {});
+  workspace.open(draft, "current");
+  const work = workspace.start();
+  workspace.show("saved");
+  pending.resolve("New");
+  await work;
+  assert.equal(workspace.display, "saved");
+  assert.equal(workspace.visibleText("Old"), "Old");
+  assert.equal(workspace.canSave, false);
+  workspace.close();
+  assert.equal(workspace.source, null);
+  assert.equal(workspace.controller.state.kind, "idle");
+
+  const late = deferred<string>();
+  const next = new TranslationWorkspace(() => draft, async (_, abort) => { signal = abort; return late.promise; }, () => {});
+  next.open(draft, "current");
+  const nextWork = next.start();
+  next.close();
+  assert.equal(signal?.aborted, true);
+  late.resolve("Late result");
+  await nextWork;
+  assert.equal(next.source, null);
+  assert.equal(next.controller.state.kind, "idle");
+});
+
+test("workspace cancellation retains original context; changed source prevents saving and requesting", async () => {
+  const { TranslationWorkspace } = await import("../src/translation.ts");
+  let source = draft;
+  const workspace = new TranslationWorkspace(() => source, async () => "English", () => {});
+  workspace.open(source, "current");
+  await workspace.start();
+  source = { ...draft, entryId: "another-entry" };
+  assert.equal(workspace.canSave, false);
+  assert.equal(workspace.visibleText(""), "");
+  workspace.cancel();
+  assert.equal(workspace.cancelled, true);
+  assert.equal(workspace.source?.entryId, draft.entryId);
+  await workspace.start();
+  assert.equal(workspace.controller.state.kind, "idle");
+});

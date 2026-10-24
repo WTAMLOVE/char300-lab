@@ -137,3 +137,55 @@ test("ZIP export uses compatible DEFLATE compression", async () => {
   const restored = (await readBackupPayload(file)) as { padding: string };
   assert.equal(restored.padding, "逐字".repeat(20_000));
 });
+
+test("saved translation survives full ZIP and analysis JSON imports including translation-only entries", async () => {
+  const { parseImportedState } = await import("../src/store.ts");
+  const state = makeState();
+  state.entries[0].versions = [];
+  state.entries[0].draft = "Unversioned draft";
+  state.entries[0].saved_translation = "English.\n\nAnother paragraph.";
+  const payload = { schema_version: 2, state };
+  const zip = new JSZip();
+  addBackupJsonFiles(zip, payload);
+  for (const path of [fullBackupJsonPath, analysisBackupJsonPath]) {
+    const restored = parseImportedState(JSON.parse(await zip.file(path)!.async("string")));
+    assert.equal(restored?.entries[0].saved_translation, state.entries[0].saved_translation);
+    assert.equal(restored?.entries[0].versions.length, 0);
+  }
+  const file = namedBlob([await zip.generateAsync({ type: "uint8array" })], "translated.zip", "application/zip");
+  assert.equal(parseImportedState(await readBackupPayload(file))?.entries[0].saved_translation, state.entries[0].saved_translation);
+});
+
+test("Markdown selection includes translation-only entries without counting them as writing", async () => {
+  const { hasMarkdownContent, renderSavedTranslationMarkdown } = await import("../src/backup.ts");
+  const entry = makeState().entries[0];
+  entry.versions = [];
+  entry.draft = "Unsaved original";
+  assert.equal(hasMarkdownContent(entry), false);
+  assert.equal(renderSavedTranslationMarkdown(entry), "");
+  entry.saved_translation = "English\nSecond line";
+  assert.equal(hasMarkdownContent(entry), true);
+  const markdown = renderSavedTranslationMarkdown(entry);
+  assert.equal(markdown.match(/### 本篇已保存译文/g)?.length, 1);
+  assert.ok(markdown.includes(entry.saved_translation));
+  assert.ok(!markdown.includes(entry.draft));
+});
+
+test("complete Markdown keeps final original and appends translation once, without leaking unsaved drafts", async () => {
+  const { renderEntryMarkdownText } = await import("../src/backup.ts");
+  const entry = makeState().entries[0];
+  entry.saved_translation = "Reference English";
+  entry.draft = "Do not export draft";
+  let markdown = renderEntryMarkdownText(entry, "第1篇", ["- V1"]);
+  assert.ok(markdown.includes(entry.versions[0].content));
+  assert.ok(markdown.includes("- V1"));
+  assert.ok(!markdown.includes(entry.draft));
+  assert.equal(markdown.match(/Reference English/g)?.length, 1);
+  entry.versions = [];
+  markdown = renderEntryMarkdownText(entry, "第1篇", []);
+  assert.ok(markdown.includes("第1篇"));
+  assert.ok(markdown.includes("Reference English"));
+  assert.ok(!markdown.includes("/300"));
+  assert.ok(!markdown.includes("迭代"));
+  assert.ok(!markdown.includes(entry.draft));
+});

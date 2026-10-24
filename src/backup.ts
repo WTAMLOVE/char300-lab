@@ -99,3 +99,30 @@ export async function generateCompressedZip(zip: JSZip): Promise<Blob> {
 export function isZipBackupFile(file: Pick<ImportFile, "name" | "type">): boolean {
   return file.name.toLowerCase().endsWith(".zip") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
 }
+
+export function hasMarkdownContent(entry: DailyEntry): boolean {
+  return entry.versions.length > 0 || Boolean(entry.saved_translation.trim());
+}
+
+export function renderSavedTranslationMarkdown(entry: DailyEntry): string {
+  return entry.saved_translation.trim()
+    ? ["### 本篇已保存译文", "", "可能不对应当前正文。", "", entry.saved_translation, ""].join("\n")
+    : "";
+}
+
+export function renderEntryMarkdownText(entry: DailyEntry, label: string, versionDescriptions: string[]): string {
+  if (!hasMarkdownContent(entry)) return "";
+  const first = entry.versions[0];
+  const last = entry.versions.at(-1);
+  const lines = [`## ${entry.date_key} · ${label}`, ""];
+  if (first && last) {
+    const summary = summarizeDiff(first.content, last.content);
+    const inserted = summary.han.insert + summary.latin.insert + summary.number.insert;
+    const deleted = summary.han.delete + summary.latin.delete + summary.number.delete;
+    lines.push(`${last.token_stats.total_units}/300`, "", last.content || "空白版本", "",
+      `文字 +${inserted} -${deleted} · 标点 +${summary.punctuation.insert} -${summary.punctuation.delete} · 迭代 ${entry.versions.length}`,
+      "", "### 版本", "", ...versionDescriptions, "");
+  }
+  lines.push(renderSavedTranslationMarkdown(entry));
+  return lines.join("\n");
+}

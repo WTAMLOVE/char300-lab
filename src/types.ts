@@ -63,6 +63,7 @@ export interface DailyEntry extends Entry {
   versions: Version[];
   draft: string;
   lastSavedContent: string;
+  saved_translation: string;
 }
 
 export interface AppState {

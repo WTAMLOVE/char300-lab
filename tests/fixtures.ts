@@ -41,6 +41,7 @@ export function makeEntry(overrides: Partial<DailyEntry> = {}): DailyEntry {
     versions,
     draft: versions.at(-1)?.content ?? "",
     lastSavedContent: versions.at(-1)?.content ?? "",
+    saved_translation: "",
     ...overrides
   };
 }

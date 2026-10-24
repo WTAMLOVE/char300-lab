@@ -348,3 +348,198 @@ test("storage status reports failure without deleting the in-memory state when l
   assert.equal(getStorageStatus().kind, "save-error");
   assert.equal(state.entries[0].versions[0].content, "第一版。");
 });
+
+test("translation saves one text per entry without changing source versions or writing timestamps", async () => {
+  const { saveTranslation, saveVersion } = await import("../src/store.ts");
+  const original = makeState([makeEntry({ entry_id: "a" }), makeEntry({ entry_id: "b" })]);
+  const translated = saveTranslation(original, "a", "English\nSecond paragraph");
+  assert.equal(original.entries[0].saved_translation, "");
+  assert.equal(translated.entries[0].saved_translation, "English\nSecond paragraph");
+  assert.equal(translated.entries[1], original.entries[1]);
+  const { saved_translation, ...article } = translated.entries[0];
+  assert.deepEqual(article, (({ saved_translation, ...rest }) => rest)(original.entries[0]));
+  assert.equal(saveTranslation(translated, "a", saved_translation), translated);
+  assert.equal(saveTranslation(translated, "missing", "English"), translated);
+  assert.equal(saveTranslation(translated, "a", "  "), translated);
+  assert.equal(saveTranslation(translated, "a", "Replacement").entries[0].saved_translation, "Replacement");
+  assert.equal(updateDraft(translated, "New draft").entries[0].saved_translation, saved_translation);
+  assert.equal(saveVersion(translated).entries[0].saved_translation, saved_translation);
+});
+
+test("old and malformed translation fields normalize safely while multiline translations round trip", () => {
+  for (const value of [undefined, null, {}, 7, " \n "]) {
+    const raw = makeState();
+    (raw.entries[0] as unknown as { saved_translation: unknown }).saved_translation = value;
+    assert.equal(normalizeState(raw).entries[0].saved_translation, "");
+  }
+  const original = makeState([makeEntry({ saved_translation: " First paragraph.\n\nSecond. " })]);
+  assert.equal(parseImportedState(JSON.parse(JSON.stringify(original)))?.entries[0].saved_translation, original.entries[0].saved_translation);
+  assert.equal(parseImportedState(makeLegacyState())?.entries[0].saved_translation, "");
+});
+
+test("translation-only historical practices are meaningful, retained, and recoverable", async () => {
+  const original = makeState([makeEntry({ date_key: "2025-01-01", versions: [], draft: "", lastSavedContent: "", saved_translation: "Only translation" })]);
+  assert.equal(hasMeaningfulArticleData(original), true);
+  assert.equal(pruneHistoricalEmptyEntries(original).entries[0].saved_translation, "Only translation");
+  loadState();
+  assert.equal((await persistState(original)).kind, "local-fallback");
+  assert.equal(loadState().entries[0].saved_translation, "Only translation");
+});
+
+// A real asynchronous in-memory OPFS adapter exercises checkpoint writes and restart recovery.
+function fakeOpfs() {
+  const files = new Map<string, string>();
+  let failWrites = false;
+  let beforeWrite: (() => Promise<void>) | undefined;
+  const directory = {
+    async getDirectoryHandle() { return directory; },
+    async getFileHandle(name: string) {
+      return {
+        async getFile() {
+          if (!files.has(name)) throw new Error("Not found");
+          return new Blob([files.get(name)!]);
+        },
+        async createWritable() {
+          let content = "";
+          return {
+            async write(text: string) {
+              if (name === "checkpoint.json") await beforeWrite?.();
+              if (failWrites) throw new Error("OPFS unavailable");
+              content = text;
+            },
+            async close() { files.set(name, content); }
+          };
+        }
+      };
+    }
+  };
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { storage: { getDirectory: async () => directory } } });
+  return { files, fail: (value: boolean) => { failWrites = value; }, pause: (callback?: () => Promise<void>) => { beforeWrite = callback; } };
+}
+
+async function startWithCheckpoint() {
+  const { hydrateOpfsStorage } = await import("../src/store.ts");
+  const disk = fakeOpfs();
+  const original = makeState([makeEntry({ saved_translation: "Old English" })]);
+  disk.files.set("checkpoint.json", JSON.stringify(original));
+  localStorage.setItem("char300-lab-state-v2", JSON.stringify(original));
+  localStorage.setItem("char300-lab-opfs-upgrade-v1", "upgraded");
+  const loaded = loadState();
+  await hydrateOpfsStorage(loaded);
+  return { disk, original };
+}
+
+test("OPFS receipt waits for actual write, queue coalescing preserves newest import", async () => {
+  const { disk, original } = await startWithCheckpoint();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  disk.pause(() => gate);
+  const next = { ...original, entries: [{ ...original.entries[0], saved_translation: "New English" }] };
+  let settled = false;
+  const first = persistState(next).then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  const imported = makeState([makeEntry({ entry_id: "imported", saved_translation: "Imported English" })]);
+  const final = persistState(imported);
+  release();
+  assert.equal((await first).kind, "opfs-saved");
+  assert.equal((await final).state.entries[0].entry_id, "imported");
+  assert.equal(JSON.parse(disk.files.get("checkpoint.json")!).entries[0].saved_translation, "Imported English");
+});
+
+test("OPFS fallback persists downgrade so restart cannot replace new translation with old checkpoint", async () => {
+  const { hydrateOpfsStorage } = await import("../src/store.ts");
+  const { disk, original } = await startWithCheckpoint();
+  disk.fail(true);
+  const next = { ...original, entries: [{ ...original.entries[0], saved_translation: "Newest English" }] };
+  assert.equal((await persistState(next)).kind, "local-fallback");
+  assert.equal(localStorage.getItem("char300-lab-opfs-upgrade-v1"), "failed");
+  assert.equal(JSON.parse(disk.files.get("checkpoint.json")!).entries[0].saved_translation, "Old English");
+  const loaded = loadState();
+  assert.equal(await hydrateOpfsStorage(loaded), null);
+  assert.equal(loaded.entries[0].saved_translation, "Newest English");
+});
+
+test("unrecoverable fallback reports failure; same text can be retried when storage recovers", async () => {
+  const { disk, original } = await startWithCheckpoint();
+  disk.fail(true);
+  const next = { ...original, entries: [{ ...original.entries[0], saved_translation: "New English" }] };
+  const realSet = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = () => { throw new Error("Quota"); };
+  assert.equal((await persistState(next)).kind, "save-error");
+  assert.equal(getStorageStatus().kind, "save-error");
+  localStorage.setItem = realSet;
+  assert.equal((await persistState(next)).kind, "local-fallback");
+  assert.equal(loadState().entries[0].saved_translation, "New English");
+});
+
+test("a failed downgrade marker is not reported as saved", async () => {
+  const { disk, original } = await startWithCheckpoint();
+  disk.fail(true);
+  const realSet = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = (key, value) => {
+    if (key === "char300-lab-opfs-upgrade-v1") throw new Error("Marker unavailable");
+    realSet(key, value);
+  };
+  assert.equal((await persistState(original)).kind, "save-error");
+  localStorage.setItem = realSet;
+});
+
+test("coalesced receipts identify the actual persisted snapshot rather than reporting the overwritten text", async () => {
+  const { disk, original } = await startWithCheckpoint();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  disk.pause(() => gate);
+  const a = persistState(original);
+  const intermediate = { ...original, entries: [{ ...original.entries[0], saved_translation: "Intermediate" }] };
+  const b = persistState(intermediate);
+  const newest = { ...original, entries: [{ ...original.entries[0], saved_translation: "Newest" }] };
+  const c = persistState(newest);
+  release();
+  await a;
+  assert.equal((await b).state.entries[0].saved_translation, "Newest");
+  assert.equal((await c).state.entries[0].saved_translation, "Newest");
+});
+
+test("OPFS success is recoverable when the local compatibility snapshot runs out of quota", async () => {
+  const { hydrateOpfsStorage } = await import("../src/store.ts");
+  const { disk, original } = await startWithCheckpoint();
+  const realSet = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = (key, value) => {
+    if (key === "char300-lab-state-v2") throw new Error("Quota");
+    realSet(key, value);
+  };
+  const next = { ...original, entries: [{ ...original.entries[0], saved_translation: "OPFS only" }] };
+  assert.equal((await persistState(next)).kind, "opfs-saved");
+  localStorage.setItem = realSet;
+  const recovered = await hydrateOpfsStorage(loadState());
+  assert.equal(recovered?.entries[0].saved_translation, "OPFS only");
+  assert.equal(JSON.parse(disk.files.get("checkpoint.json")!).entries[0].saved_translation, "OPFS only");
+});
+
+test("failed in-flight OPFS write falls back to the latest imported archive, never the old state", async () => {
+  const { disk, original } = await startWithCheckpoint();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  disk.pause(() => gate);
+  disk.fail(true);
+  const a = persistState(original);
+  const imported = makeState([makeEntry({ entry_id: "replacement", saved_translation: "Replacement" })]);
+  const b = persistState(imported);
+  release();
+  const firstReceipt = await a;
+  assert.equal(firstReceipt.kind, "local-fallback");
+  assert.equal(firstReceipt.state.entries[0].entry_id, "replacement");
+  assert.equal((await b).state.entries[0].entry_id, "replacement");
+  assert.equal(loadState().entries[0].saved_translation, "Replacement");
+});
+
+test("deleting a practice and resetting an archive also removes its saved translation", async () => {
+  const { deleteEntry, resetState } = await import("../src/store.ts");
+  loadState();
+  const original = makeState([makeEntry({ entry_id: "translated", saved_translation: "English" }), makeEntry({ entry_id: "other" })]);
+  assert.equal(deleteEntry(original, "translated").entries.some((entry) => entry.saved_translation === "English"), false);
+  const reset = resetState();
+  assert.equal(reset.entries[0].saved_translation, "");
+  await persistState(reset);
+});

@@ -107,3 +107,65 @@ export async function fetchTranslation(text: string, signal: AbortSignal): Promi
   }
   return translation;
 }
+
+/** Reading UI state is separate from the request and from persisted article data. */
+export class TranslationWorkspace {
+  readonly controller: TranslationController;
+  source: TranslationSource | null = null;
+  display: "current" | "saved" = "current";
+  cancelled = false;
+  private readonly getCurrentSource: () => TranslationSource | null;
+  private readonly onChange: () => void;
+
+  constructor(getCurrentSource: () => TranslationSource | null,
+    request: (text: string, signal: AbortSignal) => Promise<string>, onChange: () => void) {
+    this.getCurrentSource = getCurrentSource;
+    this.onChange = onChange;
+    this.controller = new TranslationController(getCurrentSource, request, onChange);
+  }
+
+  get isCurrent(): boolean {
+    return this.source !== null && sameSource(this.getCurrentSource(), this.source);
+  }
+
+  open(source: TranslationSource, display: "current" | "saved"): void {
+    this.controller.invalidate();
+    this.source = { ...source };
+    this.display = display;
+    this.cancelled = false;
+    this.onChange();
+  }
+
+  show(display: "current" | "saved"): void {
+    this.display = display;
+    this.onChange();
+  }
+
+  async start(): Promise<void> {
+    if (!this.isCurrent) return;
+    this.cancelled = false;
+    this.display = "current";
+    await this.controller.start();
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+    this.controller.invalidate();
+  }
+
+  close(): void {
+    this.source = null;
+    this.cancelled = false;
+    this.controller.invalidate();
+  }
+
+  visibleText(saved: string): string {
+    if (this.display === "saved") return saved;
+    const result = this.controller.state;
+    return result.kind === "success" && this.isCurrent ? result.translation : "";
+  }
+
+  get canSave(): boolean {
+    return this.display === "current" && this.controller.state.kind === "success" && this.isCurrent;
+  }
+}
